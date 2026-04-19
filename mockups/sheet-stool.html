@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <title>Sandbox · Стул</title>
+        <link rel="stylesheet" href="../style.css" />
+        <style>
+            /* mockup-only overrides: для статичной вёрстки отключаем fixed/fullscreen режим sheet'а
+       и даём ему плыть по странице. Никаких правок в основном style.css. */
+            body {
+                background: #e9e7e0;
+                padding: 24px 16px 80px;
+                max-width: 520px;
+                margin: 0 auto;
+            }
+            .mockup-label {
+                font-size: 12px;
+                color: var(--ink-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                margin: 28px 0 8px 4px;
+            }
+            .mockup-label:first-child {
+                margin-top: 0;
+            }
+            /* sheet без fullscreen-backdrop: показываем как карточку */
+            .mockup .sheet {
+                max-height: none;
+                animation: none;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+                border-radius: 18px;
+            }
+            /* range thumb position для статичных состояний: зеркалим то, что делает JS через --fill */
+            input[type="range"][data-mockup-fill] {
+                --fill: var(--mf, 100%);
+            }
+            /* иконка типа в заголовке sheet'а — тот же эмоджи, что на плитке главной */
+            .sheet-title h2 {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .sheet-title-icon {
+                font-size: 22px;
+                line-height: 1;
+            }
+            /* теги — капсом и компактнее */
+            .opt {
+                font-size: 11px;
+                text-transform: uppercase;
+            }
+            .opt-row {
+                gap: 6px;
+            }
+            /* «сейчас» — меньше, но bold */
+            .time-readout-label {
+                font-size: 18px;
+                font-weight: 700;
+            }
+            /* убираем линии вокруг «Установить точное время» */
+            .time-exact {
+                border-top: 0;
+            }
+            .sheet-foot {
+                border-top: 0;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- ======================================================================
+       Вариант 1 — Пустая форма (sheet только открылась, ничего не выбрано)
+       ====================================================================== -->
+        <div class="mockup-label">Вариант 1 · Пустая форма, «сейчас»</div>
+        <div class="mockup">
+            <div class="sheet">
+                <header class="sheet-head">
+                    <div class="sheet-title">
+                        <h2>
+                            <span class="sheet-title-icon" aria-hidden="true"
+                                >💩</span
+                            >Стул
+                        </h2>
+                        <p class="muted">норма · объём · цвет · примеси</p>
+                    </div>
+                    <button class="btn-ghost" type="button">Отмена</button>
+                </header>
+
+                <div class="sheet-body">
+                    <div class="field">
+                        <div class="lbl">Как сегодня *</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">норма</button>
+                            <button class="opt" type="button">запор</button>
+                            <button class="opt" type="button">диарея</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Объём</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">мало</button>
+                            <button class="opt" type="button">норма</button>
+                            <button class="opt" type="button">много</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Цвет</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">норма</button>
+                            <button class="opt" type="button">жёлтый</button>
+                            <button class="opt" type="button">зелёный</button>
+                            <button class="opt" type="button">чёрный</button>
+                            <button class="opt" type="button">с кровью</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Примеси</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">слизь</button>
+                            <button class="opt" type="button">
+                                непереваренное
+                            </button>
+                            <button class="opt" type="button">пена</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Заметка</div>
+                        <textarea rows="2" placeholder="по желанию"></textarea>
+                    </div>
+                </div>
+
+                <div class="sheet-time">
+                    <span class="lbl">Когда это было</span>
+                    <div class="time-readout">
+                        <span class="time-readout-label">сейчас</span>
+                        <span class="time-readout-time">14:22</span>
+                    </div>
+                    <div class="time-slider">
+                        <input
+                            type="range"
+                            min="0"
+                            max="6"
+                            step="1"
+                            value="6"
+                            data-mockup-fill
+                            style="--mf: 100%"
+                            aria-label="Ретро-сдвиг"
+                        />
+                        <div class="time-slider-ticks">
+                            <button type="button">−2ч</button>
+                            <button type="button">−90м</button>
+                            <button type="button">−1ч</button>
+                            <button type="button">−45м</button>
+                            <button type="button">−30м</button>
+                            <button type="button">−15м</button>
+                            <button type="button" class="active">сейчас</button>
+                        </div>
+                    </div>
+                    <label class="time-exact">
+                        <span class="time-exact-icon" aria-hidden="true"
+                            >?</span
+                        >
+                        <span class="time-exact-label"
+                            >Установить точное время</span
+                        >
+                        <span class="time-exact-chevron" aria-hidden="true"
+                            >›</span
+                        >
+                    </label>
+                </div>
+
+                <footer class="sheet-foot">
+                    <button class="btn-ghost" type="button">Ещё тег</button>
+                    <button class="btn-primary" type="button">
+                        Сохранить запись
+                    </button>
+                </footer>
+            </div>
+        </div>
+
+        <!-- ======================================================================
+       Вариант 2 — Типовая заполненная запись, слайдер на −30м
+       ====================================================================== -->
+        <div class="mockup-label">Вариант 2 · Заполнено, −30 минут</div>
+        <div class="mockup">
+            <div class="sheet">
+                <header class="sheet-head">
+                    <div class="sheet-title">
+                        <h2>
+                            <span class="sheet-title-icon" aria-hidden="true"
+                                >💩</span
+                            >Стул
+                        </h2>
+                        <p class="muted">норма · объём · цвет · примеси</p>
+                    </div>
+                    <button class="btn-ghost" type="button">Отмена</button>
+                </header>
+
+                <div class="sheet-body">
+                    <div class="field">
+                        <div class="lbl">Как сегодня *</div>
+                        <div class="opt-row">
+                            <button class="opt selected" type="button">
+                                норма
+                            </button>
+                            <button class="opt" type="button">запор</button>
+                            <button class="opt" type="button">диарея</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Объём</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">мало</button>
+                            <button class="opt selected" type="button">
+                                норма
+                            </button>
+                            <button class="opt" type="button">много</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Цвет</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">норма</button>
+                            <button class="opt selected" type="button">
+                                жёлтый
+                            </button>
+                            <button class="opt" type="button">зелёный</button>
+                            <button class="opt" type="button">чёрный</button>
+                            <button class="opt" type="button">с кровью</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Примеси</div>
+                        <div class="opt-row">
+                            <button class="opt selected" type="button">
+                                слизь
+                            </button>
+                            <button class="opt" type="button">
+                                непереваренное
+                            </button>
+                            <button class="opt" type="button">пена</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Заметка</div>
+                        <textarea rows="2" placeholder="по желанию">
+после обеда, тёплый живот</textarea
+                        >
+                    </div>
+                </div>
+
+                <div class="sheet-time">
+                    <span class="lbl">Когда это было</span>
+                    <div class="time-readout">
+                        <span class="time-readout-label">полчаса назад</span>
+                        <span class="time-readout-time">13:52</span>
+                    </div>
+                    <div class="time-slider">
+                        <input
+                            type="range"
+                            min="0"
+                            max="6"
+                            step="1"
+                            value="4"
+                            data-mockup-fill
+                            style="--mf: 66.666%"
+                            aria-label="Ретро-сдвиг"
+                        />
+                        <div class="time-slider-ticks">
+                            <button type="button">−2ч</button>
+                            <button type="button">−90м</button>
+                            <button type="button">−1ч</button>
+                            <button type="button">−45м</button>
+                            <button type="button" class="active">−30м</button>
+                            <button type="button">−15м</button>
+                            <button type="button">сейчас</button>
+                        </div>
+                    </div>
+                    <label class="time-exact">
+                        <span class="time-exact-icon" aria-hidden="true"
+                            >?</span
+                        >
+                        <span class="time-exact-label"
+                            >Установить точное время</span
+                        >
+                        <span class="time-exact-chevron" aria-hidden="true"
+                            >›</span
+                        >
+                    </label>
+                </div>
+
+                <footer class="sheet-foot">
+                    <button class="btn-ghost" type="button">Ещё тег</button>
+                    <button class="btn-primary" type="button">
+                        Сохранить запись
+                    </button>
+                </footer>
+            </div>
+        </div>
+
+        <!-- ======================================================================
+       Вариант 3 — Custom-time mode (escape-строка активна, точное время «в 13:15»)
+       ====================================================================== -->
+        <div class="mockup-label">Вариант 3 · Точное время «в 13:15»</div>
+        <div class="mockup">
+            <div class="sheet">
+                <header class="sheet-head">
+                    <div class="sheet-title">
+                        <h2>
+                            <span class="sheet-title-icon" aria-hidden="true"
+                                >💩</span
+                            >Стул
+                        </h2>
+                        <p class="muted">норма · объём · цвет · примеси</p>
+                    </div>
+                    <button class="btn-ghost" type="button">Отмена</button>
+                </header>
+
+                <div class="sheet-body">
+                    <div class="field">
+                        <div class="lbl">Как сегодня *</div>
+                        <div class="opt-row">
+                            <button class="opt" type="button">норма</button>
+                            <button class="opt selected" type="button">
+                                запор
+                            </button>
+                            <button class="opt" type="button">диарея</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Объём</div>
+                        <div class="opt-row">
+                            <button class="opt selected" type="button">
+                                мало
+                            </button>
+                            <button class="opt" type="button">норма</button>
+                            <button class="opt" type="button">много</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Цвет</div>
+                        <div class="opt-row">
+                            <button class="opt selected" type="button">
+                                норма
+                            </button>
+                            <button class="opt" type="button">жёлтый</button>
+                            <button class="opt" type="button">зелёный</button>
+                            <button class="opt" type="button">чёрный</button>
+                            <button class="opt" type="button">с кровью</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="lbl">Заметка</div>
+                        <textarea rows="2" placeholder="по желанию"></textarea>
+                    </div>
+                </div>
+
+                <div class="sheet-time">
+                    <span class="lbl">Когда это было</span>
+                    <div class="time-readout">
+                        <span class="time-readout-label">в 13:15</span>
+                        <span class="time-readout-time">13:15</span>
+                    </div>
+                    <div class="time-slider">
+                        <input
+                            type="range"
+                            min="0"
+                            max="6"
+                            step="1"
+                            value="3"
+                            data-mockup-fill
+                            style="--mf: 50%"
+                            aria-label="Ретро-сдвиг"
+                        />
+                        <div class="time-slider-ticks">
+                            <button type="button">−2ч</button>
+                            <button type="button">−90м</button>
+                            <button type="button">−1ч</button>
+                            <button type="button">−45м</button>
+                            <button type="button">−30м</button>
+                            <button type="button">−15м</button>
+                            <button type="button">сейчас</button>
+                        </div>
+                    </div>
+                    <label class="time-exact active">
+                        <span class="time-exact-icon" aria-hidden="true"
+                            >?</span
+                        >
+                        <span class="time-exact-label">Точное время</span>
+                        <span class="time-exact-chevron" aria-hidden="true"
+                            >›</span
+                        >
+                    </label>
+                </div>
+
+                <footer class="sheet-foot">
+                    <button class="btn-ghost" type="button">Ещё тег</button>
+                    <button class="btn-primary" type="button">
+                        Сохранить запись
+                    </button>
+                </footer>
+            </div>
+        </div>
+    </body>
+</html>

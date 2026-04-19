@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#f6f5f2">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Kid Journal">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="style.css">
+<title>Kid Journal</title>
+</head>
+<body>
+
+<div id="app"></div>
+
+<template id="tpl-onboarding">
+  <section class="onboarding">
+    <header class="onb-head">
+      <div class="onb-step" data-step></div>
+      <h1 data-title></h1>
+      <p class="muted" data-sub></p>
+    </header>
+    <div class="onb-body"></div>
+    <footer class="onb-foot">
+      <button class="btn-ghost" data-back>Назад</button>
+      <button class="btn-primary" data-next>Далее</button>
+    </footer>
+  </section>
+</template>
+
+<template id="tpl-main">
+  <section class="main">
+    <header class="main-head">
+      <div class="subject">
+        <span class="subject-name" data-subject></span>
+        <span class="profile-pill" data-profile></span>
+      </div>
+      <button class="history-link" data-history>История</button>
+    </header>
+
+    <div class="draft-banner hidden" data-draft-banner>
+      <span data-draft-label>Черновик от —</span>
+      <button class="link" data-draft-continue>продолжить</button>
+      <button class="link danger" data-draft-drop>удалить</button>
+    </div>
+
+    <section class="compose">
+      <h2>Новая запись</h2>
+      <div class="tile-grid" data-tiles></div>
+      <div class="composer" data-composer>
+        <div class="chip-stream" data-chip-stream></div>
+        <label class="comment">
+          <span class="lbl">Общий комментарий</span>
+          <textarea rows="2" data-comment placeholder="можно записать одной строкой — тэг не обязателен"></textarea>
+        </label>
+        <div class="compose-actions">
+          <button class="btn-primary" data-save>Сохранить запись</button>
+          <button class="btn-ghost hidden" data-discard>Отменить</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="today">
+      <h2>Сегодня</h2>
+      <div class="record-list" data-today></div>
+    </section>
+  </section>
+</template>
+
+<template id="tpl-history">
+  <section class="history">
+    <header class="sub-head">
+      <button class="btn-back" data-back>←</button>
+      <h1>История</h1>
+      <button class="history-link" data-export>Экспорт</button>
+    </header>
+    <div class="record-list" data-records></div>
+  </section>
+</template>
+
+<template id="tpl-export">
+  <div class="sheet-backdrop" data-backdrop>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <header class="sheet-head">
+        <div class="sheet-title">
+          <h2>Экспорт записей</h2>
+          <p class="muted">в хронологическом порядке</p>
+        </div>
+        <button class="btn-ghost" data-cancel>Отмена</button>
+      </header>
+      <div class="sheet-body">
+        <div class="field">
+          <div class="lbl">Период</div>
+          <div class="opt-row" data-period>
+            <button class="opt selected" type="button" data-period-key="today">сегодня</button>
+            <button class="opt" type="button" data-period-key="7d">7 дней</button>
+            <button class="opt" type="button" data-period-key="30d">30 дней</button>
+            <button class="opt" type="button" data-period-key="all">всё время</button>
+          </div>
+        </div>
+        <div class="field">
+          <div class="lbl">Формат</div>
+          <div class="opt-row" data-format>
+            <button class="opt selected" type="button" data-format-key="txt">текст</button>
+            <button class="opt" type="button" data-format-key="pdf">PDF</button>
+          </div>
+        </div>
+        <p class="muted export-summary" data-summary></p>
+      </div>
+      <footer class="sheet-foot">
+        <button class="btn-primary" data-run>Экспортировать</button>
+      </footer>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-sheet">
+  <div class="sheet-backdrop" data-backdrop>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <header class="sheet-head">
+        <div class="sheet-title">
+          <h2 data-sheet-title></h2>
+          <p class="muted" data-sheet-desc></p>
+        </div>
+        <button class="btn-ghost" data-cancel>Отмена</button>
+      </header>
+      <div class="sheet-body" data-fields></div>
+      <div class="sheet-time" data-retro>
+        <span class="lbl">Когда</span>
+        <div class="time-chips" data-retro-ticks>
+          <button type="button" class="time-chip" data-retro-min="120">−2ч</button>
+          <button type="button" class="time-chip" data-retro-min="90">−90м</button>
+          <button type="button" class="time-chip" data-retro-min="60">−1ч</button>
+          <button type="button" class="time-chip" data-retro-min="30">−30м</button>
+          <button type="button" class="time-chip" data-retro-min="0">сейчас</button>
+          <label class="time-chip time-chip-exact" data-retro-custom>
+            <span>точное</span>
+            <input type="time" step="900" data-retro-time aria-label="Точное время" />
+          </label>
+        </div>
+        <span class="time-readout-time" data-moment></span>
+      </div>
+      <footer class="sheet-foot">
+        <button class="btn-danger hidden" data-remove>Удалить</button>
+        <button class="btn-ghost" data-commit-continue>Ещё тег</button>
+        <button class="btn-primary" data-commit-save>Сохранить запись</button>
+      </footer>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-record-edit">
+  <div class="sheet-backdrop" data-backdrop>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <header class="sheet-head">
+        <div class="sheet-title">
+          <h2>Запись</h2>
+          <p class="muted" data-record-sub></p>
+        </div>
+        <button class="btn-ghost" data-cancel>Закрыть</button>
+      </header>
+      <div class="sheet-body">
+        <div class="chip-stream" data-chip-stream></div>
+        <div class="tile-grid compact" data-tiles></div>
+        <label class="comment">
+          <span class="lbl">Общий комментарий</span>
+          <textarea rows="2" data-comment></textarea>
+        </label>
+      </div>
+      <footer class="sheet-foot">
+        <button class="btn-danger" data-delete>Удалить запись</button>
+        <button class="btn-primary" data-save>Сохранить</button>
+      </footer>
+    </div>
+  </div>
+</template>
+
+<script src="https://unpkg.com/dexie@4.0.8/dist/dexie.min.js"></script>
+<script src="config/types.js"></script>
+<script src="config/profiles.js"></script>
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  }
+</script>
+</body>
+</html>
