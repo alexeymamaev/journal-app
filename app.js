@@ -20,11 +20,54 @@ window.addEventListener('unhandledrejection', (e) => showError(e.reason || e));
 
 // DB name — отдельное от v4 («kidjournal»), чтобы не конфликтовать с остатками старой схемы.
 const db = new Dexie('kidjournal-v5');
+
+// v1 — исходная схема v5 (subjectId + profileId-как-категория).
 db.version(1).stores({
   config:  '&id',
   records: '++id, subjectId, status, postedAt, sortMoment',
   events:  '++id, recordId, type, moment',
 });
+
+// v2 (2026-04-19, решение 29) — переименование:
+//   records.subjectId → records.profileId (человек)
+//   records.profileId (старое, = категория) → удаляется
+//   config.contexts[] + child + activeIndex + mainTiles + activeTypeKeys →
+//     config.profiles[{id, name, age, categories[], mainTileOrder[]}] + activeProfileId
+db.version(2).stores({
+  config:  '&id',
+  records: '++id, profileId, status, postedAt, sortMoment',
+  events:  '++id, recordId, type, moment',
+}).upgrade(async (trans) => {
+  // records: переименование полей
+  await trans.table('records').toCollection().modify(r => {
+    const person = r.subjectId;
+    delete r.subjectId;
+    delete r.profileId; // было категорией — выбрасываем
+    if (person) r.profileId = person;
+  });
+  // config: миграция структуры
+  await trans.table('config').toCollection().modify(cfg => {
+    if (cfg.profiles && cfg.activeProfileId) return; // уже на v2
+    const ctx = (cfg.contexts || [])[cfg.activeIndex || 0] || {};
+    const profileId = ctx.subjectId || 'child';
+    const categoryKey = ctx.profileId || 'gi';
+    const profile = {
+      id: profileId,
+      name: cfg.child?.name || profileId,
+      age: cfg.child?.age || '',
+      categories: [categoryKey],
+      mainTileOrder: Array.isArray(cfg.mainTiles) ? cfg.mainTiles.slice() : [],
+    };
+    cfg.profiles = [profile];
+    cfg.activeProfileId = profile.id;
+    delete cfg.contexts;
+    delete cfg.activeIndex;
+    delete cfg.mainTiles;
+    delete cfg.child;
+    delete cfg.activeTypeKeys;
+  });
+});
+
 db.open().catch(err => showError(err));
 
 const CONFIG_ID = 1;
@@ -51,15 +94,6 @@ function fmtTime(iso) {
   const d = new Date(iso);
   return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
-function fmtDelta(iso) {
-  const diffMin = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (diffMin < 1) return '';
-  const h = Math.floor(diffMin / 60);
-  const m = diffMin % 60;
-  if (h === 0) return `−${m}м`;
-  if (m === 0) return `−${h}ч`;
-  return `−${h}ч ${m}м`;
-}
 function fmtDate(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
@@ -69,6 +103,54 @@ function startOfDayIso(d=new Date()) {
 }
 function endOfDayIso(d=new Date()) {
   const x = new Date(d); x.setHours(23,59,59,999); return x.toISOString();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+function slugify(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9а-яё]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function genProfileId(name, existingIds) {
+  const base = slugify(name) || 'profile';
+  if (!existingIds.includes(base)) return base;
+  let i = 2;
+  while (existingIds.includes(`${base}-${i}`)) i++;
+  return `${base}-${i}`;
+}
+
+// ---------- config helpers ----------
+
+function getActiveProfile(cfg) {
+  cfg = cfg || state.config;
+  if (!cfg || !cfg.profiles) return null;
+  return cfg.profiles.find(p => p.id === cfg.activeProfileId) || cfg.profiles[0] || null;
+}
+
+// Объединение тем из всех включённых категорий профиля, сохраняя порядок mainTileOrder.
+function getProfileThemeKeys(profile) {
+  if (!profile) return [];
+  const set = new Set();
+  for (const catKey of (profile.categories || [])) {
+    const cat = window.CATEGORY_BY_KEY[catKey];
+    if (!cat) continue;
+    for (const t of cat.activeTypes) set.add(t);
+  }
+  return [...set];
+}
+
+// Порядок плиток на главном = пересечение mainTileOrder с доступными темами (+ добавить новые в конец).
+function getMainTileOrder(profile) {
+  const available = new Set(getProfileThemeKeys(profile));
+  const ordered = (profile?.mainTileOrder || []).filter(k => available.has(k));
+  for (const k of available) if (!ordered.includes(k)) ordered.push(k);
+  return ordered;
+}
+
+function getMainTiles(profile) {
+  return getMainTileOrder(profile).slice(0, 8);
 }
 
 function eventSummary(ev) {
@@ -110,10 +192,10 @@ function isRequiredFilled(type, fields) {
 // ---------- state ----------
 
 const state = {
-  config: null,             // { id, child, contexts, activeIndex, mainTiles }
+  config: null,             // { id, profiles: [{id,name,age,categories[],mainTileOrder[]}], activeProfileId }
   screen: 'onboarding',
-  onb: { step: 0, name: '', age: '', profileKeys: [], typeKeys: [] },
-  composer: null,           // { recordId } — when main is in compose mode
+  onb: null,                // { step, mode, profileId?, name, age, categories[], themes[] }
+  composer: null,           // { recordId }
   sheet: null,              // { recordId, eventId?, typeKey, draft:{fields,note,moment}, originalMoment }
   editRecord: null,         // { recordId }
 };
@@ -123,8 +205,11 @@ const state = {
 async function boot() {
   try {
     state.config = await loadConfig();
-    if (!state.config) renderOnboarding();
-    else await renderMain();
+    if (!state.config) {
+      startOnboarding();
+    } else {
+      await renderMain();
+    }
   } catch (e) {
     showError(e);
   }
@@ -143,14 +228,27 @@ function setScreen(node) {
 
 // ---------- onboarding ----------
 
+function startOnboarding(mode, prefill) {
+  // mode: undefined (first-run) | 'new-profile' (add profile from settings)
+  state.onb = {
+    step: 0,
+    mode: mode || 'first',
+    name: prefill?.name || '',
+    age: prefill?.age || '',
+    categories: prefill?.categories ? prefill.categories.slice() : [],
+    themes: [],
+  };
+  renderOnboarding();
+}
+
 function renderOnboarding() {
   state.screen = 'onboarding';
   const node = cloneTpl('tpl-onboarding');
   const step = state.onb.step;
-  const titles = ['Ребёнок', 'Профиль', 'Тэги на главном'];
+  const titles = ['Профиль', 'Категории', 'Темы на главном'];
   const subs = [
-    'С чего начнём — кого ведём.',
-    'Под что профилируем. Потом можно добавить ещё.',
+    'Кого будем наблюдать.',
+    'Под что наблюдаем. Можно выбрать несколько.',
     'Что будет на главном экране. Можно менять позже.',
   ];
   $('[data-step]', node).textContent = `Шаг ${step + 1} из 3`;
@@ -162,50 +260,47 @@ function renderOnboarding() {
     body.innerHTML = `
       <label class="field">
         <span class="lbl">Имя</span>
-        <input type="text" id="onb-name" placeholder="например, Лёва" value="${state.onb.name || ''}">
+        <input type="text" id="onb-name" placeholder="например, Лёва" value="${escapeHtml(state.onb.name)}">
       </label>
       <label class="field">
         <span class="lbl">Возраст</span>
-        <input type="text" id="onb-age" placeholder="например, 11 лет" value="${state.onb.age || ''}">
+        <input type="text" id="onb-age" placeholder="например, 3 года" value="${escapeHtml(state.onb.age)}">
       </label>
     `;
   } else if (step === 1) {
     const grid = document.createElement('div');
     grid.className = 'tile-grid';
-    for (const p of window.PROFILES) {
-      const selected = state.onb.profileKeys.includes(p.key);
+    for (const c of window.CATEGORIES) {
+      const selected = state.onb.categories.includes(c.key);
       const tile = document.createElement('button');
       tile.type = 'button';
       tile.className = 'tile' + (selected ? ' selected' : '');
-      tile.dataset.profile = p.key;
+      tile.dataset.category = c.key;
       tile.innerHTML = `
-        <span class="tile-icon">${p.icon}</span>
-        <span class="tile-label">${p.label}</span>
-        <span class="tile-sub">${p.description}</span>
+        <span class="tile-icon">${c.icon}</span>
+        <span class="tile-label">${c.label}</span>
+        <span class="tile-sub">${c.description}</span>
       `;
       tile.addEventListener('click', () => {
-        const set = new Set(state.onb.profileKeys);
-        if (set.has(p.key)) set.delete(p.key); else set.add(p.key);
-        state.onb.profileKeys = [...set];
+        const set = new Set(state.onb.categories);
+        if (set.has(c.key)) set.delete(c.key); else set.add(c.key);
+        state.onb.categories = [...set];
         renderOnboarding();
       });
       grid.appendChild(tile);
     }
     body.appendChild(grid);
   } else if (step === 2) {
-    const chosenProfiles = state.onb.profileKeys.map(k => window.PROFILE_BY_KEY[k]);
-    const typeKeySet = new Set();
-    for (const p of chosenProfiles) p.activeTypes.forEach(k => typeKeySet.add(k));
-    const typeKeys = [...typeKeySet];
-    if (state.onb.typeKeys.length === 0) {
-      state.onb.typeKeys = typeKeys.slice(); // default — all active
+    const themeKeys = unionThemeKeysFromCategories(state.onb.categories);
+    if (state.onb.themes.length === 0) {
+      state.onb.themes = themeKeys.slice(); // default — все
     }
     const grid = document.createElement('div');
     grid.className = 'tile-grid';
-    for (const k of typeKeys) {
+    for (const k of themeKeys) {
       const t = window.TYPE_BY_KEY[k];
       if (!t) continue;
-      const selected = state.onb.typeKeys.includes(k);
+      const selected = state.onb.themes.includes(k);
       const tile = document.createElement('button');
       tile.type = 'button';
       tile.className = 'tile' + (selected ? ' selected' : '');
@@ -215,9 +310,9 @@ function renderOnboarding() {
         <span class="tile-sub">${t.description}</span>
       `;
       tile.addEventListener('click', () => {
-        const set = new Set(state.onb.typeKeys);
+        const set = new Set(state.onb.themes);
         if (set.has(k)) set.delete(k); else set.add(k);
-        state.onb.typeKeys = [...set];
+        state.onb.themes = [...set];
         renderOnboarding();
       });
       grid.appendChild(tile);
@@ -227,8 +322,27 @@ function renderOnboarding() {
 
   const back = $('[data-back]', node);
   const next = $('[data-next]', node);
-  back.disabled = step === 0;
-  back.addEventListener('click', () => { state.onb.step = Math.max(0, step - 1); renderOnboarding(); });
+  const isNewProfileMode = state.onb.mode === 'new-profile';
+  if (step === 0) {
+    if (isNewProfileMode) {
+      back.disabled = false;
+      back.textContent = 'Отмена';
+    } else {
+      back.disabled = true;
+    }
+  } else {
+    back.disabled = false;
+    back.textContent = 'Назад';
+  }
+  back.addEventListener('click', () => {
+    if (step === 0 && isNewProfileMode) {
+      state.onb = null;
+      renderSettings();
+      return;
+    }
+    state.onb.step = Math.max(0, step - 1);
+    renderOnboarding();
+  });
   next.textContent = step === 2 ? 'Готово' : 'Далее';
   next.addEventListener('click', async () => {
     if (step === 0) {
@@ -240,12 +354,12 @@ function renderOnboarding() {
       state.onb.step = 1;
       renderOnboarding();
     } else if (step === 1) {
-      if (state.onb.profileKeys.length === 0) { alert('Выбери хотя бы один профиль'); return; }
+      if (state.onb.categories.length === 0) { alert('Выбери хотя бы одну категорию'); return; }
       state.onb.step = 2;
-      state.onb.typeKeys = []; // reset so defaults recompute with new profile set
+      state.onb.themes = []; // reset — пересчитать default под новые категории
       renderOnboarding();
     } else {
-      if (state.onb.typeKeys.length === 0) { alert('Выбери хотя бы один тэг'); return; }
+      if (state.onb.themes.length === 0) { alert('Выбери хотя бы одну тему'); return; }
       await finishOnboarding();
     }
   });
@@ -253,28 +367,64 @@ function renderOnboarding() {
   setScreen(node);
 }
 
+function unionThemeKeysFromCategories(categoryKeys) {
+  const set = new Set();
+  for (const k of categoryKeys) {
+    const c = window.CATEGORY_BY_KEY[k];
+    if (!c) continue;
+    for (const t of c.activeTypes) set.add(t);
+  }
+  return [...set];
+}
+
+function buildMainTileOrder(categories, themes) {
+  // default order: по первому категории в списке, затем остальные темы
+  const primaryCat = window.CATEGORY_BY_KEY[categories[0]];
+  const primary = (primaryCat?.defaultMainTiles || []).filter(k => themes.includes(k));
+  const rest = themes.filter(k => !primary.includes(k));
+  return [...primary, ...rest];
+}
+
 async function finishOnboarding() {
-  const primaryProfile = state.onb.profileKeys[0];
-  const subjectId = slugify(state.onb.name) || 'child';
-  const profileObj = window.PROFILE_BY_KEY[primaryProfile];
-  // default main tiles = profile's default order filtered by chosen types
-  const defaultOrder = profileObj.defaultMainTiles.filter(k => state.onb.typeKeys.includes(k));
-  const remaining = state.onb.typeKeys.filter(k => !defaultOrder.includes(k));
-  const mainTiles = [...defaultOrder, ...remaining];
+  const { name, age, categories, themes, mode } = state.onb;
+  const mainTileOrder = buildMainTileOrder(categories, themes);
+
+  if (mode === 'new-profile' && state.config) {
+    // добавить новый профиль в существующий конфиг
+    const existingIds = state.config.profiles.map(p => p.id);
+    const newProfile = {
+      id: genProfileId(name, existingIds),
+      name, age,
+      categories: categories.slice(),
+      mainTileOrder,
+    };
+    const updated = {
+      ...state.config,
+      profiles: [...state.config.profiles, newProfile],
+      activeProfileId: newProfile.id,
+    };
+    await saveConfig(updated);
+    state.config = await loadConfig();
+    state.onb = null;
+    await renderMain();
+    return;
+  }
+
+  // первый запуск либо повторный онбординг
+  const profile = {
+    id: genProfileId(name, []),
+    name, age,
+    categories: categories.slice(),
+    mainTileOrder,
+  };
   const cfg = {
-    child: { name: state.onb.name, age: state.onb.age },
-    contexts: [{ subjectId, profileId: primaryProfile, label: profileObj.label, icon: profileObj.icon }],
-    activeIndex: 0,
-    mainTiles,
-    activeTypeKeys: state.onb.typeKeys,
+    profiles: [profile],
+    activeProfileId: profile.id,
   };
   await saveConfig(cfg);
   state.config = await loadConfig();
+  state.onb = null;
   await renderMain();
-}
-
-function slugify(s) {
-  return (s || '').toLowerCase().replace(/[^a-z0-9а-яё]+/g, '-').replace(/^-|-$/g, '');
 }
 
 // ---------- main screen ----------
@@ -282,15 +432,16 @@ function slugify(s) {
 async function renderMain() {
   state.screen = 'main';
   const node = cloneTpl('tpl-main');
-  const cfg = state.config;
-  const ctx = cfg.contexts[cfg.activeIndex];
-  $('[data-subject]', node).textContent = cfg.child.name;
-  const pp = $('[data-profile]', node);
-  pp.textContent = `${ctx.icon} ${ctx.label}`;
+  const profile = getActiveProfile();
+  if (!profile) { startOnboarding(); return; }
+
+  $('[data-profile-name]', node).textContent = profile.name;
+  $('[data-profile-switcher]', node).addEventListener('click', () => openProfileSwitcher());
+  $('[data-settings]', node).addEventListener('click', () => renderSettings());
 
   // draft recovery
   const draft = await db.records
-    .where('subjectId').equals(ctx.subjectId)
+    .where('profileId').equals(profile.id)
     .filter(r => r.status === 'draft')
     .first();
 
@@ -308,14 +459,14 @@ async function renderMain() {
     });
   }
 
-  // tile grid (compose)
+  // tile grid
   const tilesEl = $('[data-tiles]', node);
-  renderTileGrid(tilesEl, (typeKey) => {
+  renderTileGrid(tilesEl, getMainTiles(profile), (typeKey) => {
     const rid = state.composer?.recordId || null;
     openTypeSheet({ recordId: rid, typeKey });
   });
 
-  // composer block — always visible; draft is created lazily on first tile commit or first comment keystroke
+  // composer block — always visible; draft создаётся лениво
   const composerEl = $('[data-composer]', node);
   await renderComposerInto(composerEl, state.composer?.recordId || null);
 
@@ -325,7 +476,7 @@ async function renderMain() {
   const to = endOfDayIso();
   const todayRecords = await db.records
     .where('sortMoment').between(from, to, true, true)
-    .filter(r => r.status === 'saved' && r.subjectId === ctx.subjectId)
+    .filter(r => r.status === 'saved' && r.profileId === profile.id)
     .toArray();
   todayRecords.sort((a, b) => (b.sortMoment > a.sortMoment ? 1 : -1));
   if (todayRecords.length === 0) {
@@ -336,15 +487,15 @@ async function renderMain() {
     }
   }
 
-  // history link
+  // inline history link
   $('[data-history]', node).addEventListener('click', () => renderHistory());
 
   setScreen(node);
 }
 
-function renderTileGrid(root, onTap) {
+function renderTileGrid(root, typeKeys, onTap) {
   root.innerHTML = '';
-  for (const k of state.config.mainTiles) {
+  for (const k of typeKeys) {
     const t = window.TYPE_BY_KEY[k];
     if (!t) continue;
     const tile = document.createElement('button');
@@ -361,13 +512,11 @@ function renderTileGrid(root, onTap) {
 }
 
 async function createDraftRecord() {
-  const cfg = state.config;
-  const ctx = cfg.contexts[cfg.activeIndex];
+  const profile = getActiveProfile();
   const now = new Date().toISOString();
   return await db.records.add({
-    subjectId: ctx.subjectId,
+    profileId: profile.id,
     postedAt: now,
-    profileId: ctx.profileId,
     status: 'draft',
     comment: '',
     sortMoment: now,
@@ -399,7 +548,6 @@ async function renderComposerInto(root, recordId) {
   }
   updateSaveBtn();
 
-  // Discard shown only when a draft exists
   if (recordId) {
     discardBtn.classList.remove('hidden');
     discardBtn.addEventListener('click', async () => {
@@ -410,13 +558,12 @@ async function renderComposerInto(root, recordId) {
     });
   }
 
-  // Comment autosave (lazily creates a draft record on first keystroke if text non-empty)
   let commentTimer = null;
   const flushComment = async () => {
     const txt = commentEl.value;
     let rid = state.composer?.recordId;
     if (!rid) {
-      if (!txt.trim()) return null;           // empty comment, don't create empty draft
+      if (!txt.trim()) return null;
       rid = await createDraftRecord();
       state.composer = { recordId: rid };
     }
@@ -430,11 +577,10 @@ async function renderComposerInto(root, recordId) {
   });
 
   saveBtn.addEventListener('click', async () => {
-    // flush any pending comment write
     clearTimeout(commentTimer);
     await flushComment();
     const rid = state.composer?.recordId;
-    if (!rid) return;                          // nothing to save
+    if (!rid) return;
     const evts = await db.events.where('recordId').equals(rid).toArray();
     const moments = evts.map(e => e.moment).sort();
     const now = new Date().toISOString();
@@ -469,16 +615,414 @@ function renderEventChip(ev) {
   return el;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-}
-
 async function deleteRecord(recordId) {
   await db.events.where('recordId').equals(recordId).delete();
   await db.records.delete(recordId);
 }
 
-// ---------- bottom sheet (type) ----------
+// ---------- profile switcher ----------
+
+function openProfileSwitcher() {
+  const cfg = state.config;
+  const node = cloneTpl('tpl-profile-switcher');
+  const list = $('[data-profiles]', node);
+  list.innerHTML = '';
+
+  for (const p of cfg.profiles) {
+    const active = p.id === cfg.activeProfileId;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ps-row' + (active ? ' active' : '');
+    const sub = p.categories.map(k => window.CATEGORY_BY_KEY[k]?.label).filter(Boolean).join(', ');
+    const ageBit = p.age ? `${p.age} · ` : '';
+    row.innerHTML = `
+      <span class="ps-dot ${active ? 'on' : 'off'}" aria-hidden="true"></span>
+      <div class="ps-main">
+        <span class="ps-name">${escapeHtml(p.name)}</span>
+        <span class="ps-sub">${escapeHtml(ageBit + sub)}</span>
+      </div>
+      ${active ? '<span class="ps-check" aria-hidden="true">✓</span>' : ''}
+    `;
+    row.addEventListener('click', async () => {
+      if (!active) {
+        const upd = { ...cfg, activeProfileId: p.id };
+        await saveConfig(upd);
+        state.config = await loadConfig();
+      }
+      close();
+      if (!active) await renderMain();
+    });
+    list.appendChild(row);
+  }
+
+  const addRow = document.createElement('button');
+  addRow.type = 'button';
+  addRow.className = 'ps-row add';
+  addRow.innerHTML = `
+    <span class="ps-plus" aria-hidden="true">+</span>
+    <div class="ps-main">
+      <span class="ps-name">Новый профиль</span>
+    </div>
+  `;
+  addRow.addEventListener('click', () => {
+    close();
+    startOnboarding('new-profile');
+  });
+  list.appendChild(addRow);
+
+  const close = () => node.remove();
+  $('[data-done]', node).addEventListener('click', close);
+  node.addEventListener('click', (e) => {
+    if (e.target === node) close();
+  });
+
+  document.body.appendChild(node);
+}
+
+// ---------- settings ----------
+
+async function renderSettings() {
+  state.screen = 'settings';
+  const node = cloneTpl('tpl-settings');
+  const root = $('[data-root]', node);
+  root.innerHTML = '';
+
+  // Профили
+  root.appendChild(sgLabel('Профили'));
+  const profilesGroup = sgGroup();
+  const active = getActiveProfile();
+  for (const p of state.config.profiles) {
+    const isActive = p.id === state.config.activeProfileId;
+    const sub = (p.age ? p.age + ' · ' : '')
+      + p.categories.map(k => window.CATEGORY_BY_KEY[k]?.label).filter(Boolean).join(', ');
+    const row = sgRow({
+      dot: isActive ? 'on' : 'off',
+      title: p.name,
+      sub,
+      chev: true,
+      onTap: () => renderSettingsProfile(p.id),
+    });
+    profilesGroup.appendChild(row);
+  }
+  profilesGroup.appendChild(sgRow({
+    add: true,
+    title: '+ Добавить профиль',
+    onTap: () => startOnboarding('new-profile'),
+  }));
+  root.appendChild(profilesGroup);
+
+  // Главный экран
+  root.appendChild(sgLabel('Главный экран'));
+  const mainGroup = sgGroup();
+  const themeKeys = getProfileThemeKeys(active);
+  const mainCount = getMainTiles(active).length;
+  mainGroup.appendChild(sgRow({
+    title: 'Темы на главном',
+    sub: 'для активного профиля',
+    value: `${mainCount} из ${themeKeys.length}`,
+    chev: true,
+    onTap: () => renderSettingsThemes(active.id),
+  }));
+  root.appendChild(mainGroup);
+
+  // Данные
+  root.appendChild(sgLabel('Данные'));
+  const dataGroup = sgGroup();
+  dataGroup.appendChild(sgRow({
+    title: 'Повторить онбординг',
+    sub: 'не удаляет записи',
+    chev: true,
+    onTap: async () => {
+      if (!confirm('Пройти онбординг заново? Записи останутся на месте, но текущий конфиг профиля будет перезаписан.')) return;
+      state.composer = null;
+      startOnboarding('first');
+    },
+  }));
+  dataGroup.appendChild(sgRow({
+    title: 'Очистить все данные',
+    danger: true,
+    onTap: async () => {
+      if (!confirm('Удалить ВСЕ записи и настройки? Действие необратимое.')) return;
+      if (!confirm('Точно? Это выкинет все записи Лёвы и других профилей.')) return;
+      await clearAllData();
+    },
+  }));
+  root.appendChild(dataGroup);
+
+  // О приложении
+  root.appendChild(sgLabel('О приложении'));
+  const aboutGroup = sgGroup();
+  aboutGroup.appendChild(sgRow({
+    title: 'Версия',
+    value: '0.6.0',
+    staticRow: true,
+  }));
+  root.appendChild(aboutGroup);
+
+  $('[data-back]', node).addEventListener('click', () => renderMain());
+
+  setScreen(node);
+}
+
+function sgLabel(text) {
+  const el = document.createElement('div');
+  el.className = 'sg-label';
+  el.textContent = text;
+  return el;
+}
+
+function sgGroup() {
+  const el = document.createElement('div');
+  el.className = 'sg-group';
+  return el;
+}
+
+function sgRow(opts) {
+  const { dot, title, sub, value, chev, danger, add, staticRow, onTap } = opts;
+  const row = document.createElement(staticRow ? 'div' : 'button');
+  if (!staticRow) row.type = 'button';
+  row.className = 'sg-row'
+    + (danger ? ' danger' : '')
+    + (add ? ' add' : '')
+    + (staticRow ? ' static' : '');
+  if (dot) {
+    const d = document.createElement('span');
+    d.className = `sg-dot ${dot === 'on' ? 'on' : 'off'}`;
+    d.setAttribute('aria-hidden', 'true');
+    row.appendChild(d);
+  }
+  const main = document.createElement('div');
+  main.className = 'sg-row-main';
+  const t = document.createElement('span');
+  t.className = 'sg-row-title';
+  t.textContent = title;
+  main.appendChild(t);
+  if (sub) {
+    const s = document.createElement('span');
+    s.className = 'sg-row-sub';
+    s.textContent = sub;
+    main.appendChild(s);
+  }
+  row.appendChild(main);
+  if (value) {
+    const v = document.createElement('span');
+    v.className = 'sg-row-value';
+    v.textContent = value;
+    row.appendChild(v);
+  }
+  if (chev) {
+    const c = document.createElement('span');
+    c.className = 'sg-row-chev';
+    c.setAttribute('aria-hidden', 'true');
+    c.textContent = '›';
+    row.appendChild(c);
+  }
+  if (onTap && !staticRow) row.addEventListener('click', onTap);
+  return row;
+}
+
+async function clearAllData() {
+  db.close();
+  await Dexie.delete('kidjournal-v5');
+  // hard reload — state reset, Dexie reopen fresh
+  location.reload();
+}
+
+// --- settings: profile detail ---
+
+function renderSettingsProfile(profileId) {
+  state.screen = 'settings-profile';
+  const node = cloneTpl('tpl-settings-profile');
+  const cfg = state.config;
+  const existing = cfg.profiles.find(p => p.id === profileId);
+  if (!existing) { renderSettings(); return; }
+
+  $('[data-title]', node).textContent = existing.name;
+
+  const nameEl = $('[data-name]', node);
+  const ageEl = $('[data-age]', node);
+  nameEl.value = existing.name;
+  ageEl.value = existing.age || '';
+
+  // categories multi-check
+  const catGroup = $('[data-categories]', node);
+  catGroup.innerHTML = '';
+  const selectedCats = new Set(existing.categories);
+  for (const c of window.CATEGORIES) {
+    const on = selectedCats.has(c.key);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'cat-row' + (on ? '' : ' off');
+    row.innerHTML = `
+      <span class="cat-check ${on ? 'on' : ''}" aria-hidden="true"></span>
+      <span class="cat-icon">${c.icon}</span>
+      <div class="cat-main">
+        <span class="cat-label">${c.label}</span>
+        <span class="cat-sub">${escapeHtml(c.description)}</span>
+      </div>
+    `;
+    row.addEventListener('click', () => {
+      if (selectedCats.has(c.key)) selectedCats.delete(c.key);
+      else selectedCats.add(c.key);
+      const nowOn = selectedCats.has(c.key);
+      row.classList.toggle('off', !nowOn);
+      $('.cat-check', row).classList.toggle('on', nowOn);
+    });
+    catGroup.appendChild(row);
+  }
+
+  // themes-count подпись
+  const themesCountEl = $('[data-themes-count]', node);
+  const themeKeys = getProfileThemeKeys(existing);
+  const mainTiles = getMainTiles(existing);
+  themesCountEl.textContent = `${mainTiles.length} из ${themeKeys.length}`;
+
+  $('[data-themes-open]', node).addEventListener('click', async () => {
+    await saveProfileEdits();
+    renderSettingsThemes(profileId);
+  });
+
+  $('[data-delete]', node).addEventListener('click', async () => {
+    const last = cfg.profiles.length === 1;
+    const msg = last
+      ? 'Удалить единственный профиль? После удаления откроется онбординг заново (записи удалятся).'
+      : `Удалить профиль «${existing.name}»? Все записи этого профиля будут удалены.`;
+    if (!confirm(msg)) return;
+    if (!confirm('Точно удалить? Действие необратимое.')) return;
+    // delete records of this profile
+    const toDelete = await db.records.where('profileId').equals(profileId).toArray();
+    for (const r of toDelete) {
+      await db.events.where('recordId').equals(r.id).delete();
+    }
+    await db.records.where('profileId').equals(profileId).delete();
+    const remaining = cfg.profiles.filter(p => p.id !== profileId);
+    if (remaining.length === 0) {
+      // конфиг пустой — стираем и начинаем заново
+      await db.config.delete(CONFIG_ID);
+      state.config = null;
+      startOnboarding();
+      return;
+    }
+    const newActive = cfg.activeProfileId === profileId ? remaining[0].id : cfg.activeProfileId;
+    const upd = { ...cfg, profiles: remaining, activeProfileId: newActive };
+    await saveConfig(upd);
+    state.config = await loadConfig();
+    renderSettings();
+  });
+
+  async function saveProfileEdits() {
+    const name = nameEl.value.trim() || existing.name;
+    const age = ageEl.value.trim();
+    const categories = [...selectedCats];
+    if (categories.length === 0) {
+      alert('У профиля должна быть хотя бы одна категория.');
+      return false;
+    }
+    // подрезаем mainTileOrder под новые категории; добавляем новые темы в конец
+    const themeKeys = new Set(unionThemeKeysFromCategories(categories));
+    const order = (existing.mainTileOrder || []).filter(k => themeKeys.has(k));
+    for (const k of themeKeys) if (!order.includes(k)) order.push(k);
+    const updated = { ...existing, name, age, categories, mainTileOrder: order };
+    const profiles = cfg.profiles.map(p => p.id === profileId ? updated : p);
+    await saveConfig({ ...cfg, profiles });
+    state.config = await loadConfig();
+    return true;
+  }
+
+  $('[data-back]', node).addEventListener('click', async () => {
+    await saveProfileEdits();
+    renderSettings();
+  });
+
+  setScreen(node);
+}
+
+// --- settings: themes (drag list) ---
+
+function renderSettingsThemes(profileId) {
+  state.screen = 'settings-themes';
+  const node = cloneTpl('tpl-settings-themes');
+  const cfg = state.config;
+  const profile = cfg.profiles.find(p => p.id === profileId);
+  if (!profile) { renderSettings(); return; }
+
+  const available = new Set(getProfileThemeKeys(profile));
+  const order = (profile.mainTileOrder || []).filter(k => available.has(k));
+  for (const k of available) if (!order.includes(k)) order.push(k);
+  // всегда оставляем хоть одну включённой (чтобы главный не был пустым)
+
+  const listEl = $('[data-list]', node);
+
+  const saveOrder = async () => {
+    const updated = { ...profile, mainTileOrder: order };
+    const profiles = cfg.profiles.map(p => p.id === profileId ? updated : p);
+    await saveConfig({ ...cfg, profiles });
+    state.config = await loadConfig();
+  };
+
+  function render() {
+    listEl.innerHTML = '';
+    order.forEach((key, idx) => {
+      const t = window.TYPE_BY_KEY[key];
+      if (!t) return;
+      const row = document.createElement('div');
+      row.className = 'theme-row';
+      row.draggable = true;
+      row.dataset.key = key;
+      row.innerHTML = `
+        <span class="drag-handle" aria-hidden="true">⋮⋮</span>
+        <span class="theme-icon">${t.icon}</span>
+        <div class="theme-row-main">
+          <span class="theme-row-label">${t.label}</span>
+          <span class="theme-row-sub">${escapeHtml(t.description || '')}</span>
+        </div>
+        ${idx < 8 ? `<span class="theme-row-badge">${idx + 1}</span>` : ''}
+      `;
+      // Кнопки «вверх/вниз» для мобильного (drag на iOS тяжёлый без dedicated lib)
+      const up = document.createElement('button');
+      up.type = 'button';
+      up.className = 'theme-btn';
+      up.textContent = '↑';
+      up.disabled = idx === 0;
+      up.addEventListener('click', async () => {
+        if (idx === 0) return;
+        [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
+        await saveOrder();
+        render();
+      });
+      const down = document.createElement('button');
+      down.type = 'button';
+      down.className = 'theme-btn';
+      down.textContent = '↓';
+      down.disabled = idx === order.length - 1;
+      down.addEventListener('click', async () => {
+        if (idx === order.length - 1) return;
+        [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
+        await saveOrder();
+        render();
+      });
+      const ctrl = document.createElement('div');
+      ctrl.className = 'theme-ctrl';
+      ctrl.appendChild(up);
+      ctrl.appendChild(down);
+      row.appendChild(ctrl);
+      listEl.appendChild(row);
+
+      if (idx === 7 && order.length > 8) {
+        const cutoff = document.createElement('div');
+        cutoff.className = 'cutoff';
+        cutoff.textContent = 'Под «+ ещё тема»';
+        listEl.appendChild(cutoff);
+      }
+    });
+  }
+  render();
+
+  $('[data-back]', node).addEventListener('click', () => renderSettings());
+  setScreen(node);
+}
+
+// ---------- bottom sheet (theme / type) ----------
 
 async function openTypeSheet({ recordId, eventId, typeKey }) {
   const type = window.TYPE_BY_KEY[typeKey];
@@ -522,7 +1066,6 @@ function renderSheet() {
     body.appendChild(renderField(f));
   }
 
-  // retro: компактный chip-row из пресетов + кнопка «точное» с нативным time picker
   const ticksEl = $('[data-retro-ticks]', node);
   const momentEl = $('[data-moment]', node);
   const exactLbl = $('[data-retro-custom]', node);
@@ -559,7 +1102,6 @@ function renderSheet() {
     b.addEventListener('click', () => applyTickByMin(+b.dataset.retroMin));
   });
 
-  // «точное» → нативный time picker (через label+hidden input)
   exactInput.addEventListener('change', () => {
     const val = exactInput.value;
     if (!val) return;
@@ -575,7 +1117,6 @@ function renderSheet() {
     updateReadout();
   });
 
-  // init
   const initDate = new Date(st.draft.moment);
   exactInput.value = `${String(initDate.getHours()).padStart(2, '0')}:${String(initDate.getMinutes()).padStart(2, '0')}`;
   const initDiff = Math.round((Date.now() - initDate.getTime()) / 60000);
@@ -587,7 +1128,6 @@ function renderSheet() {
   }
   updateReadout();
 
-  // commit: two outcomes — сохранить запись целиком, или добавить ещё тег
   const inEditFlow = !!state.editRecord;
   const commitEvent = async () => {
     if (!isRequiredFilled(type, st.draft.fields)) {
@@ -609,7 +1149,6 @@ function renderSheet() {
     };
     if (st.eventId) await db.events.update(st.eventId, payload);
     else await db.events.add(payload);
-    // refresh record sortMoment
     const events = await db.events.where('recordId').equals(recordId).toArray();
     if (events.length) {
       const moments = events.map(e => e.moment).sort();
@@ -622,7 +1161,6 @@ function renderSheet() {
   const continueBtn = $('[data-commit-continue]', node);
 
   if (inEditFlow) {
-    // Edit-mode: single-action — commit and return to record-edit form.
     saveBtn.textContent = 'Готово';
     continueBtn.classList.add('hidden');
   }
@@ -635,7 +1173,6 @@ function renderSheet() {
       await openRecordEdit(recordId);
       return;
     }
-    // commit the whole record as saved
     const events = await db.events.where('recordId').equals(recordId).toArray();
     const moments = events.map(e => e.moment).sort();
     const now = new Date().toISOString();
@@ -657,14 +1194,12 @@ function renderSheet() {
     await renderMain();
   });
 
-  // remove (only when editing existing event)
   const remove = $('[data-remove]', node);
   if (st.eventId) {
     remove.classList.remove('hidden');
     remove.addEventListener('click', async () => {
       if (!confirm('Удалить это наблюдение из записи?')) return;
       await db.events.delete(st.eventId);
-      // if record now empty and is draft, drop it too
       const leftover = await db.events.where('recordId').equals(st.recordId).count();
       if (leftover === 0) {
         const r = await db.records.get(st.recordId);
@@ -692,7 +1227,6 @@ function renderSheet() {
       renderMain();
     }
   });
-  // node itself is the .sheet-backdrop — dismiss on tap outside the sheet body
   node.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) {
       state.sheet = null;
@@ -780,13 +1314,14 @@ async function openRecordEdit(recordId) {
 
   const stream = $('[data-chip-stream]', node);
   if (events.length === 0) {
-    stream.innerHTML = '<p class="muted">Нет наблюдений. Добавь тип снизу или удали запись.</p>';
+    stream.innerHTML = '<p class="muted">Нет наблюдений. Добавь тему снизу или удали запись.</p>';
   } else {
     for (const ev of events) stream.appendChild(renderEventChip(ev));
   }
 
   const tiles = $('[data-tiles]', node);
-  renderTileGrid(tiles, (typeKey) => {
+  const profile = getActiveProfile();
+  renderTileGrid(tiles, getMainTiles(profile), (typeKey) => {
     openTypeSheet({ recordId, typeKey });
   });
 
@@ -861,10 +1396,9 @@ async function renderRecordCard(record) {
 async function renderHistory() {
   state.screen = 'history';
   const node = cloneTpl('tpl-history');
-  const cfg = state.config;
-  const ctx = cfg.contexts[cfg.activeIndex];
+  const profile = getActiveProfile();
   const records = await db.records
-    .where('subjectId').equals(ctx.subjectId)
+    .where('profileId').equals(profile.id)
     .filter(r => r.status === 'saved')
     .toArray();
   records.sort((a,b) => (b.sortMoment > a.sortMoment ? 1 : -1));
@@ -872,7 +1406,6 @@ async function renderHistory() {
   if (records.length === 0) {
     list.innerHTML = '<p class="muted empty">Пока пусто.</p>';
   } else {
-    // group by day
     let lastDay = null;
     for (const r of records) {
       const day = new Date(r.sortMoment).toDateString();
@@ -913,16 +1446,16 @@ function periodRange(key) {
   return { fromIso: start.toISOString(), toIso: endIso };
 }
 
-async function collectExportData(ctx, periodKey) {
+async function collectExportData(profile, periodKey) {
   const { fromIso, toIso } = periodRange(periodKey);
   let records = await db.records
-    .where('subjectId').equals(ctx.subjectId)
+    .where('profileId').equals(profile.id)
     .filter(r => r.status === 'saved')
     .toArray();
   if (fromIso) {
     records = records.filter(r => r.sortMoment >= fromIso && r.sortMoment <= toIso);
   }
-  records.sort((a,b) => (a.sortMoment > b.sortMoment ? 1 : -1)); // chronological, old → new
+  records.sort((a,b) => (a.sortMoment > b.sortMoment ? 1 : -1));
   const recordIds = records.map(r => r.id);
   const allEvents = recordIds.length
     ? await db.events.where('recordId').anyOf(recordIds).toArray()
@@ -970,12 +1503,19 @@ function eventFieldLines(ev) {
       if (String(v).trim()) out.push([f.label, String(v).trim()]);
     }
   }
-  if (ev.note) out.push(['Тег-коммент', ev.note]);
+  if (ev.note) out.push(['Комментарий к теме', ev.note]);
   return out;
 }
 
+function profileCategoriesLabel(profile) {
+  return (profile.categories || [])
+    .map(k => window.CATEGORY_BY_KEY[k]?.label)
+    .filter(Boolean)
+    .join(', ');
+}
+
 function buildTxt(meta, periodKey, data) {
-  const { ctx, subjectName } = meta;
+  const { profile } = meta;
   const { records, eventsByRec, fromIso, toIso } = data;
   const periodLabel = {
     today: 'Сегодня',
@@ -985,8 +1525,9 @@ function buildTxt(meta, periodKey, data) {
   }[periodKey];
   const totalEvents = Array.from(eventsByRec.values()).reduce((s, a) => s + a.length, 0);
   const lines = [];
-  lines.push(`Журнал · ${subjectName || ctx.subjectId}`);
-  lines.push(`Субъект: ${ctx.subjectId} · профиль: ${ctx.label || ctx.profileId || '—'}`);
+  lines.push(`Журнал · ${profile.name}`);
+  const catLbl = profileCategoriesLabel(profile);
+  lines.push(`Профиль: ${profile.name}${profile.age ? ' · ' + profile.age : ''}${catLbl ? ' · категории: ' + catLbl : ''}`);
   const effFrom = fromIso || (records[0] && records[0].sortMoment) || toIso;
   lines.push(`Период: ${periodLabel} (${fmtExportDateShort(effFrom)} – ${fmtExportDateShort(toIso)})`);
   lines.push(`Записей: ${records.length} · событий: ${totalEvents}`);
@@ -1037,7 +1578,7 @@ function buildTxt(meta, periodKey, data) {
 }
 
 function renderExportDom(meta, periodKey, data) {
-  const { ctx, subjectName } = meta;
+  const { profile } = meta;
   const { records, eventsByRec, fromIso, toIso } = data;
   const periodLabel = {
     today: 'Сегодня',
@@ -1050,14 +1591,15 @@ function renderExportDom(meta, periodKey, data) {
   root.className = 'export-view';
 
   const h1 = document.createElement('h1');
-  h1.textContent = `Журнал · ${subjectName || ctx.subjectId}`;
+  h1.textContent = `Журнал · ${profile.name}`;
   root.appendChild(h1);
 
   const metaEl = document.createElement('div');
   metaEl.className = 'export-meta';
   const effFrom = fromIso || (records[0] && records[0].sortMoment) || toIso;
+  const catLbl = profileCategoriesLabel(profile);
   metaEl.innerHTML = [
-    `Субъект: ${ctx.subjectId} · профиль: ${ctx.label || ctx.profileId || '—'}`,
+    `Профиль: ${escapeHtml(profile.name)}${profile.age ? ' · ' + escapeHtml(profile.age) : ''}${catLbl ? ' · категории: ' + escapeHtml(catLbl) : ''}`,
     `Период: ${periodLabel} (${fmtExportDateShort(effFrom)} – ${fmtExportDateShort(toIso)})`,
     `Записей: ${records.length} · событий: ${totalEvents}`,
     `Экспорт: ${fmtExportNow()}`,
@@ -1091,20 +1633,20 @@ function renderExportDom(meta, periodKey, data) {
     const typeLabels = evs.length
       ? evs.map(e => e.labelSnapshot || window.TYPE_BY_KEY[e.type]?.label || e.type).join(' + ')
       : 'Заметка';
-    head.innerHTML = `<span class="t">${time}</span>${typeLabels}`;
+    head.innerHTML = `<span class="t">${time}</span>${escapeHtml(typeLabels)}`;
     rec.appendChild(head);
 
     for (const ev of evs) {
       if (evs.length > 1) {
         const sub = document.createElement('div');
         sub.className = 'export-field';
-        sub.innerHTML = `<span class="fl">[${ev.labelSnapshot || ev.type}]</span>`;
+        sub.innerHTML = `<span class="fl">[${escapeHtml(ev.labelSnapshot || ev.type)}]</span>`;
         rec.appendChild(sub);
       }
       for (const [k, v] of eventFieldLines(ev)) {
         const line = document.createElement('div');
         line.className = 'export-field';
-        line.innerHTML = `<span class="fl">${k}:</span> ${v}`;
+        line.innerHTML = `<span class="fl">${escapeHtml(k)}:</span> ${escapeHtml(v)}`;
         rec.appendChild(line);
       }
     }
@@ -1119,9 +1661,9 @@ function renderExportDom(meta, periodKey, data) {
   return root;
 }
 
-function exportFilename(ctx, periodKey, data, ext) {
+function exportFilename(profile, periodKey, data, ext) {
   const { records, fromIso, toIso } = data;
-  const subj = ctx.subjectId || 'export';
+  const subj = profile.id || 'export';
   const toStr = fmtExportDateShort(toIso);
   if (periodKey === 'today') return `kid-journal-${subj}-${toStr}.${ext}`;
   const fromStr = fromIso
@@ -1161,14 +1703,12 @@ function deliverPdfViaPrint(filename, dom) {
   };
   window.addEventListener('afterprint', cleanup);
   window.print();
-  // Safari iOS не всегда стреляет afterprint — страхуем
   setTimeout(cleanup, 60000);
 }
 
 function openExport() {
-  const cfg = state.config;
-  const ctx = cfg.contexts[cfg.activeIndex];
-  const meta = { ctx, subjectName: cfg.child?.name };
+  const profile = getActiveProfile();
+  const meta = { profile };
   const node = cloneTpl('tpl-export');
   const periodRow = $('[data-period]', node);
   const formatRow = $('[data-format]', node);
@@ -1184,7 +1724,7 @@ function openExport() {
   };
 
   const refresh = async () => {
-    currentData = await collectExportData(ctx, periodKey);
+    currentData = await collectExportData(profile, periodKey);
     const totalEvents = Array.from(currentData.eventsByRec.values()).reduce((s, a) => s + a.length, 0);
     const n = currentData.records.length;
     if (n === 0) {
@@ -1218,7 +1758,7 @@ function openExport() {
 
   runBtn.addEventListener('click', async () => {
     if (!currentData || currentData.records.length === 0) return;
-    const filename = exportFilename(ctx, periodKey, currentData, formatKey);
+    const filename = exportFilename(profile, periodKey, currentData, formatKey);
     if (formatKey === 'txt') {
       await deliverTxt(filename, buildTxt(meta, periodKey, currentData));
     } else {

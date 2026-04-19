@@ -1,4 +1,4 @@
-const CACHE = 'kidjournal-v5-5';
+const CACHE = 'kidjournal-v5-6';
 const ASSETS = [
   './',
   'index.html',
@@ -6,7 +6,7 @@ const ASSETS = [
   'app.js',
   'manifest.json',
   'config/types.js',
-  'config/profiles.js',
+  'config/categories.js',
   'https://unpkg.com/dexie@4.0.8/dist/dexie.min.js',
 ];
 

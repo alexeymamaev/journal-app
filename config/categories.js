@@ -1,6 +1,6 @@
-// Builtin profiles. Each profile = list of active type-keys + default main tile order + report template id (used later).
+// Builtin categories. Each category = list of active theme-keys + default main tile order + report template id.
 
-window.PROFILES = [
+window.CATEGORIES = [
   {
     key: 'gi',
     label: 'ЖКТ',
@@ -39,4 +39,4 @@ window.PROFILES = [
   },
 ];
 
-window.PROFILE_BY_KEY = Object.fromEntries(window.PROFILES.map(p => [p.key, p]));
+window.CATEGORY_BY_KEY = Object.fromEntries(window.CATEGORIES.map(c => [c.key, c]));

@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sandbox · Настройки</title>
+    <link rel="stylesheet" href="../style.css" />
+    <style>
+      body {
+        background: #e9e7e0;
+        padding: 24px 16px 80px;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+      .mockup-label {
+        font-size: 12px;
+        color: var(--ink-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 28px 0 8px 4px;
+      }
+      .mockup-label:first-child { margin-top: 0; }
+      .mockup {
+        background: var(--bg);
+        border-radius: 18px;
+        padding: 14px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+
+      .sg-label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-muted);
+        margin: 18px 14px 6px;
+      }
+      .sg-label:first-of-type { margin-top: 4px; }
+      .sg-group {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .sg-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px;
+        min-height: 52px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        width: 100%;
+        background: transparent;
+        cursor: pointer;
+      }
+      .sg-row:last-child { border-bottom: 0; }
+      .sg-row:active { background: var(--surface-alt); }
+      .sg-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+      .sg-row-title { font-size: 16px; color: var(--ink); }
+      .sg-row-sub { font-size: 13px; color: var(--ink-muted); }
+      .sg-row-value {
+        font-size: 15px;
+        color: var(--ink-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .sg-row-chev { color: var(--ink-muted); font-size: 18px; line-height: 1; }
+      .sg-row.danger .sg-row-title { color: var(--danger); }
+      .sg-row.add .sg-row-title { color: var(--accent); }
+
+      .sg-dot {
+        width: 10px; height: 10px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+      }
+      .sg-dot.on { background: var(--accent); }
+      .sg-dot.off {
+        background: transparent;
+        border: 1.5px solid var(--border-strong);
+      }
+
+      .sub-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 2px 14px;
+      }
+      .sub-head h1 { margin: 0; font-size: 20px; flex: 1; }
+      .btn-back {
+        width: 40px; height: 40px;
+        font-size: 22px;
+        border-radius: 10px;
+      }
+      .btn-back:active { background: var(--surface-alt); }
+
+      /* крошка категорий в sub-строке */
+      .cat-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .cat-chip {
+        font-size: 12px;
+        color: var(--ink-muted);
+        background: var(--surface-alt);
+        border: 1px solid var(--border);
+        padding: 2px 8px;
+        border-radius: 999px;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- ====================================================================
+         Вариант 1 — Один профиль (Лёва), одна категория (ЖКТ)
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 1 · Один профиль, одна категория</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Настройки</h1>
+      </header>
+
+      <div class="sg-label">Профили</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <span class="sg-dot on" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Лёва</span>
+            <span class="sg-row-sub">3 года · ЖКТ</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row add" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">+ Добавить профиль</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="sg-label">Главный экран</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Темы на главном</span>
+            <span class="sg-row-sub">для активного профиля</span>
+          </div>
+          <span class="sg-row-value">7 из 7</span>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+      </div>
+
+      <div class="sg-label">Данные</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Повторить онбординг</span>
+            <span class="sg-row-sub">не удаляет записи</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row danger" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Очистить все данные</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="sg-label">О приложении</div>
+      <div class="sg-group">
+        <div class="sg-row" style="cursor:default">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Версия</span>
+          </div>
+          <span class="sg-row-value">0.5.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 2 — Один профиль (Лёва), три категории (ЖКТ + Питание + Гомео)
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 2 · Один профиль с несколькими категориями</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Настройки</h1>
+      </header>
+
+      <div class="sg-label">Профили</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <span class="sg-dot on" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Лёва</span>
+            <div class="cat-chips" style="margin-top: 4px">
+              <span class="cat-chip">ЖКТ</span>
+              <span class="cat-chip">Питание</span>
+              <span class="cat-chip">Гомео</span>
+            </div>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row add" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">+ Добавить профиль</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="sg-label">Главный экран</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Темы на главном</span>
+            <span class="sg-row-sub">объединены из всех категорий профиля</span>
+          </div>
+          <span class="sg-row-value">8 из 9</span>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+      </div>
+
+      <div class="sg-label">Данные</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Повторить онбординг</span>
+            <span class="sg-row-sub">не удаляет записи</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row danger" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Очистить все данные</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="sg-label">О приложении</div>
+      <div class="sg-group">
+        <div class="sg-row" style="cursor:default">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Версия</span>
+          </div>
+          <span class="sg-row-value">0.5.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 3 — Два профиля (Лёва + Алексей) — переключение между людьми
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 3 · Два профиля — переключение между людьми</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Настройки</h1>
+      </header>
+
+      <div class="sg-label">Профили</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <span class="sg-dot on" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Лёва</span>
+            <span class="sg-row-sub">3 года · ЖКТ, Гомео</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row" type="button">
+          <span class="sg-dot off" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Алексей</span>
+            <span class="sg-row-sub">Питание</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row add" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">+ Добавить профиль</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="sg-label">Главный экран</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Темы на главном</span>
+            <span class="sg-row-sub">для активного профиля: Лёва</span>
+          </div>
+          <span class="sg-row-value">7 из 7</span>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+      </div>
+
+      <div class="sg-label">Данные</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Повторить онбординг</span>
+            <span class="sg-row-sub">не удаляет записи</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row danger" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Очистить все данные</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="sg-label">О приложении</div>
+      <div class="sg-group">
+        <div class="sg-row" style="cursor:default">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Версия</span>
+          </div>
+          <span class="sg-row-value">0.5.0</span>
+        </div>
+      </div>
+    </div>
+
+  </body>
+</html>

@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sandbox · Переключатель профилей</title>
+    <link rel="stylesheet" href="../style.css" />
+    <style>
+      body {
+        background: #e9e7e0;
+        padding: 24px 16px 80px;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+      .mockup-label {
+        font-size: 12px;
+        color: var(--ink-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 28px 0 8px 4px;
+      }
+      .mockup-label:first-child { margin-top: 0; }
+      .mockup {
+        background: var(--bg);
+        border-radius: 18px;
+        padding: 0;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        overflow: hidden;
+      }
+
+      /* --- Имитация header'а главного экрана (фон за sheet'ом) --- */
+      .main-preview {
+        padding: 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg);
+      }
+      .main-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 2px 8px;
+      }
+      .profile-switcher {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px 6px 8px;
+        border-radius: 10px;
+        font-size: 17px;
+        font-weight: 600;
+        background: transparent;
+        border: 0;
+        color: var(--ink);
+      }
+      .profile-switcher:active { background: var(--surface-alt); }
+      .profile-switcher .chev {
+        font-size: 12px;
+        color: var(--ink-muted);
+      }
+      .settings-link {
+        font-size: 15px;
+        color: var(--accent);
+        padding: 8px 10px;
+      }
+      .main-ghost {
+        opacity: 0.25;
+        pointer-events: none;
+        padding: 8px 2px 0;
+      }
+      .main-ghost h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-muted);
+        margin: 4px 2px 8px;
+      }
+      .main-ghost .tile-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+      }
+      .main-ghost .tile {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 14px;
+        min-height: 64px;
+      }
+
+      /* --- Sheet (мимикрирует .sheet из style.css, без fullscreen-backdrop) --- */
+      .mockup .sheet {
+        background: var(--surface);
+        border-top-left-radius: 18px;
+        border-top-right-radius: 18px;
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.12);
+        overflow: hidden;
+        position: relative;
+      }
+      .sheet-handle {
+        display: flex;
+        justify-content: center;
+        padding: 8px 0 4px;
+      }
+      .sheet-handle::before {
+        content: "";
+        width: 40px; height: 4px;
+        border-radius: 999px;
+        background: var(--border-strong);
+      }
+      .sheet-head-ps {
+        padding: 6px 14px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--border);
+      }
+      .sheet-head-ps h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      .sheet-head-ps .btn-ghost {
+        padding: 6px 10px;
+        min-height: 0;
+        font-size: 15px;
+        border: 0;
+      }
+
+      .ps-list {
+        display: flex;
+        flex-direction: column;
+      }
+      .ps-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px;
+        min-height: 60px;
+        background: transparent;
+        border: 0;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        width: 100%;
+        cursor: pointer;
+      }
+      .ps-row:last-child { border-bottom: 0; }
+      .ps-row:active { background: var(--surface-alt); }
+      .ps-row.active { background: #eaf1ec; }
+
+      .ps-dot {
+        width: 12px; height: 12px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+      }
+      .ps-dot.on { background: var(--accent); }
+      .ps-dot.off {
+        background: transparent;
+        border: 1.5px solid var(--border-strong);
+      }
+
+      .ps-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .ps-name {
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .ps-sub {
+        font-size: 13px;
+        color: var(--ink-muted);
+      }
+      .ps-check {
+        color: var(--accent);
+        font-size: 18px;
+      }
+
+      .ps-row.add {
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .ps-row.add .ps-name {
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .ps-plus {
+        width: 12px; height: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent);
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      /* крошка категорий в sub-строке */
+      .cat-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 2px;
+      }
+      .cat-chip {
+        font-size: 12px;
+        color: var(--ink-muted);
+        background: var(--surface-alt);
+        border: 1px solid var(--border);
+        padding: 2px 8px;
+        border-radius: 999px;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- ====================================================================
+         Вариант 1 — Один профиль (MVP1-дефолт)
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 1 · Один профиль (MVP1-дефолт)</div>
+    <div class="mockup">
+      <!-- фон: головной экран приглушённо -->
+      <div class="main-preview">
+        <header class="main-head">
+          <button class="profile-switcher" type="button">
+            Лёва <span class="chev" aria-hidden="true">▾</span>
+          </button>
+          <button class="settings-link" type="button">Настройки</button>
+        </header>
+        <div class="main-ghost">
+          <h2>Новая запись</h2>
+          <div class="tile-grid">
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sheet">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-head-ps">
+          <h2>Профиль</h2>
+          <button class="btn-ghost" type="button">Готово</button>
+        </header>
+
+        <div class="ps-list">
+          <button class="ps-row active" type="button">
+            <span class="ps-dot on" aria-hidden="true"></span>
+            <div class="ps-main">
+              <span class="ps-name">Лёва</span>
+              <span class="ps-sub">3 года · ЖКТ</span>
+            </div>
+            <span class="ps-check" aria-hidden="true">✓</span>
+          </button>
+          <button class="ps-row add" type="button">
+            <span class="ps-plus" aria-hidden="true">+</span>
+            <div class="ps-main">
+              <span class="ps-name">Новый профиль</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 2 — Два профиля (Лёва активный + Алексей)
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 2 · Два профиля — активный Лёва</div>
+    <div class="mockup">
+      <div class="main-preview">
+        <header class="main-head">
+          <button class="profile-switcher" type="button">
+            Лёва <span class="chev" aria-hidden="true">▾</span>
+          </button>
+          <button class="settings-link" type="button">Настройки</button>
+        </header>
+        <div class="main-ghost">
+          <h2>Новая запись</h2>
+          <div class="tile-grid">
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sheet">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-head-ps">
+          <h2>Профиль</h2>
+          <button class="btn-ghost" type="button">Готово</button>
+        </header>
+
+        <div class="ps-list">
+          <button class="ps-row active" type="button">
+            <span class="ps-dot on" aria-hidden="true"></span>
+            <div class="ps-main">
+              <span class="ps-name">Лёва</span>
+              <span class="ps-sub">3 года · ЖКТ, Гомео</span>
+            </div>
+            <span class="ps-check" aria-hidden="true">✓</span>
+          </button>
+          <button class="ps-row" type="button">
+            <span class="ps-dot off" aria-hidden="true"></span>
+            <div class="ps-main">
+              <span class="ps-name">Алексей</span>
+              <span class="ps-sub">Питание</span>
+            </div>
+          </button>
+          <button class="ps-row add" type="button">
+            <span class="ps-plus" aria-hidden="true">+</span>
+            <div class="ps-main">
+              <span class="ps-name">Новый профиль</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 3 — Три профиля с категориями как chip'ы
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 3 · Три профиля — категории отдельными чипами</div>
+    <div class="mockup">
+      <div class="main-preview">
+        <header class="main-head">
+          <button class="profile-switcher" type="button">
+            Мира <span class="chev" aria-hidden="true">▾</span>
+          </button>
+          <button class="settings-link" type="button">Настройки</button>
+        </header>
+        <div class="main-ghost">
+          <h2>Новая запись</h2>
+          <div class="tile-grid">
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sheet">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-head-ps">
+          <h2>Профиль</h2>
+          <button class="btn-ghost" type="button">Готово</button>
+        </header>
+
+        <div class="ps-list">
+          <button class="ps-row" type="button">
+            <span class="ps-dot off" aria-hidden="true"></span>
+            <div class="ps-main">
+              <span class="ps-name">Лёва</span>
+              <div class="cat-chips">
+                <span class="cat-chip">ЖКТ</span>
+                <span class="cat-chip">Гомео</span>
+              </div>
+            </div>
+          </button>
+          <button class="ps-row active" type="button">
+            <span class="ps-dot on" aria-hidden="true"></span>
+            <div class="ps-main">
+              <span class="ps-name">Мира</span>
+              <div class="cat-chips">
+                <span class="cat-chip">Питание</span>
+                <span class="cat-chip">Общее</span>
+              </div>
+            </div>
+            <span class="ps-check" aria-hidden="true">✓</span>
+          </button>
+          <button class="ps-row" type="button">
+            <span class="ps-dot off" aria-hidden="true"></span>
+            <div class="ps-main">
+              <span class="ps-name">Алексей</span>
+              <div class="cat-chips">
+                <span class="cat-chip">Питание</span>
+              </div>
+            </div>
+          </button>
+          <button class="ps-row add" type="button">
+            <span class="ps-plus" aria-hidden="true">+</span>
+            <div class="ps-main">
+              <span class="ps-name">Новый профиль</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </body>
+</html>

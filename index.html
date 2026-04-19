@@ -34,11 +34,11 @@
 <template id="tpl-main">
   <section class="main">
     <header class="main-head">
-      <div class="subject">
-        <span class="subject-name" data-subject></span>
-        <span class="profile-pill" data-profile></span>
-      </div>
-      <button class="history-link" data-history>История</button>
+      <button class="profile-switcher" type="button" data-profile-switcher>
+        <span class="profile-switcher-name" data-profile-name></span>
+        <span class="profile-switcher-chev" aria-hidden="true">▾</span>
+      </button>
+      <button class="settings-link" type="button" data-settings>Настройки</button>
     </header>
 
     <div class="draft-banner hidden" data-draft-banner>
@@ -54,7 +54,7 @@
         <div class="chip-stream" data-chip-stream></div>
         <label class="comment">
           <span class="lbl">Общий комментарий</span>
-          <textarea rows="2" data-comment placeholder="можно записать одной строкой — тэг не обязателен"></textarea>
+          <textarea rows="2" data-comment placeholder="можно записать одной строкой — тема не обязательна"></textarea>
         </label>
         <div class="compose-actions">
           <button class="btn-primary" data-save>Сохранить запись</button>
@@ -64,7 +64,10 @@
     </section>
 
     <section class="today">
-      <h2>Сегодня</h2>
+      <div class="today-head">
+        <h2>Сегодня</h2>
+        <button class="history-inline" type="button" data-history>История →</button>
+      </div>
       <div class="record-list" data-today></div>
     </section>
   </section>
@@ -145,7 +148,7 @@
       </div>
       <footer class="sheet-foot">
         <button class="btn-danger hidden" data-remove>Удалить</button>
-        <button class="btn-ghost" data-commit-continue>Ещё тег</button>
+        <button class="btn-ghost" data-commit-continue>Ещё тема</button>
         <button class="btn-primary" data-commit-save>Сохранить запись</button>
       </footer>
     </div>
@@ -178,9 +181,93 @@
   </div>
 </template>
 
+<template id="tpl-profile-switcher">
+  <div class="sheet-backdrop" data-backdrop>
+    <div class="sheet profile-switcher-sheet" role="dialog" aria-modal="true">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <header class="sheet-head-ps">
+        <h2>Профиль</h2>
+        <button class="btn-ghost" data-done>Готово</button>
+      </header>
+      <div class="ps-list" data-profiles></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-settings">
+  <section class="settings">
+    <header class="sub-head">
+      <button class="btn-back" data-back>←</button>
+      <h1>Настройки</h1>
+    </header>
+    <div class="sg-root" data-root></div>
+  </section>
+</template>
+
+<template id="tpl-settings-profile">
+  <section class="settings">
+    <header class="sub-head">
+      <button class="btn-back" data-back>←</button>
+      <h1 data-title>Профиль</h1>
+    </header>
+
+    <div class="sg-label">О профиле</div>
+    <div class="sg-group">
+      <div class="sg-input-row">
+        <span class="lbl">Имя</span>
+        <input type="text" data-name>
+      </div>
+      <div class="sg-input-row">
+        <span class="lbl">Возраст</span>
+        <input type="text" data-age placeholder="по желанию">
+      </div>
+    </div>
+
+    <div class="sg-label">Категории</div>
+    <div class="sg-group" data-categories></div>
+
+    <div class="sg-label" data-themes-label>Темы</div>
+    <div class="sg-group" data-themes-group>
+      <button class="sg-row" type="button" data-themes-open>
+        <div class="sg-row-main">
+          <span class="sg-row-title">Темы на главном</span>
+          <span class="sg-row-sub">из выбранных категорий</span>
+        </div>
+        <span class="sg-row-value" data-themes-count></span>
+        <span class="sg-row-chev" aria-hidden="true">›</span>
+      </button>
+    </div>
+
+    <div class="sg-label" data-danger-label>&nbsp;</div>
+    <div class="sg-group" data-danger-group>
+      <button class="sg-row danger" type="button" data-delete>
+        <div class="sg-row-main">
+          <span class="sg-row-title">Удалить профиль</span>
+          <span class="sg-row-sub">записи этого профиля тоже удалятся</span>
+        </div>
+      </button>
+    </div>
+
+    <div class="settings-foot" data-foot></div>
+  </section>
+</template>
+
+<template id="tpl-settings-themes">
+  <section class="settings">
+    <header class="sub-head">
+      <button class="btn-back" data-back>←</button>
+      <h1>Темы на главном</h1>
+    </header>
+    <div class="tag-hint">
+      Перетаскивай, чтобы изменить порядок. Первые 8 попадают на главный, остальные — под «+ ещё тема».
+    </div>
+    <div class="theme-list" data-list></div>
+  </section>
+</template>
+
 <script src="https://unpkg.com/dexie@4.0.8/dist/dexie.min.js"></script>
 <script src="config/types.js"></script>
-<script src="config/profiles.js"></script>
+<script src="config/categories.js"></script>
 <script src="app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {

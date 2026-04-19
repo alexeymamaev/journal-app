@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sandbox · Темы на главном</title>
+    <link rel="stylesheet" href="../style.css" />
+    <style>
+      body {
+        background: #e9e7e0;
+        padding: 24px 16px 80px;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+      .mockup-label {
+        font-size: 12px;
+        color: var(--ink-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 28px 0 8px 4px;
+      }
+      .mockup-label:first-child { margin-top: 0; }
+      .mockup {
+        background: var(--bg);
+        border-radius: 18px;
+        padding: 14px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+
+      .sub-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 2px 14px;
+      }
+      .sub-head h1 { margin: 0; font-size: 20px; flex: 1; }
+      .btn-back {
+        width: 40px; height: 40px;
+        font-size: 22px;
+        border-radius: 10px;
+      }
+      .btn-back:active { background: var(--surface-alt); }
+
+      .tag-hint {
+        padding: 10px 12px;
+        background: #fff4d4;
+        border: 1px solid #e6d28a;
+        border-radius: 10px;
+        font-size: 13px;
+        color: var(--ink);
+        margin-bottom: 14px;
+      }
+
+      /* Список тэгов с drag-handle и чекбоксом */
+      .tag-list {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .tag-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        min-height: 56px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+      .tag-row:last-child { border-bottom: 0; }
+      .tag-row.dragging {
+        background: var(--surface-alt);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+        opacity: 0.96;
+      }
+      .tag-row.off .tag-row-main { opacity: 0.5; }
+
+      .drag-handle {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        color: var(--border-strong);
+        font-size: 18px;
+        line-height: 0.6;
+        cursor: grab;
+        padding: 4px 6px;
+        user-select: none;
+      }
+      .drag-handle:active { cursor: grabbing; }
+
+      .tag-check {
+        width: 22px; height: 22px;
+        border-radius: 6px;
+        border: 1.5px solid var(--border-strong);
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--surface);
+        color: var(--accent-ink);
+        font-size: 14px;
+      }
+      .tag-check.on {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+      .tag-check.on::before { content: "✓"; }
+
+      .tag-icon { font-size: 20px; flex: 0 0 auto; }
+
+      .tag-row-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .tag-row-label { font-size: 16px; font-weight: 500; }
+      .tag-row-sub { font-size: 12px; color: var(--ink-muted); }
+
+      .tag-row-badge {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ink-muted);
+        background: var(--surface-alt);
+        padding: 3px 8px;
+        border-radius: 999px;
+      }
+
+      /* Разделитель 8-го тэга */
+      .cutoff {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        background: var(--surface-alt);
+        border-bottom: 1px solid var(--border);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ink-muted);
+      }
+      .cutoff::before, .cutoff::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--border-strong);
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- ====================================================================
+         Вариант 1 — Дефолт ЖКТ (7 тэгов, все включены, граница 8 не достигнута)
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 1 · Профиль с одной категорией (ЖКТ) — 7 тем, все на главном</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Темы на главном</h1>
+      </header>
+
+      <div class="tag-hint">
+        Перетаскивай, чтобы изменить порядок. Первые 8 попадают на главный, остальные — под «+ ещё тема».
+      </div>
+
+      <div class="tag-list">
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">💩</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Стул</span>
+            <span class="tag-row-sub">норма · объём · цвет · примеси</span>
+          </div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🍽</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Еда</span>
+            <span class="tag-row-sub">что ел · сколько · реакция</span>
+          </div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">⚡</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Реакция</span>
+            <span class="tag-row-sub">кожа · живот · поведение</span>
+          </div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">😊</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Настроение</span>
+            <span class="tag-row-sub">шкала</span>
+          </div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🌙</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Сон</span>
+            <span class="tag-row-sub">длительность · качество</span>
+          </div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">💊</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Лекарства</span>
+            <span class="tag-row-sub">препарат · доза</span>
+          </div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🩺</span>
+          <div class="tag-row-main">
+            <span class="tag-row-label">Симптом</span>
+            <span class="tag-row-sub">что · интенсивность</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 2 — Много тэгов: виден разделитель после 8-го, часть выключена
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 2 · Больше 8 тем — виден разделитель и выключенные</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Темы на главном</h1>
+      </header>
+
+      <div class="tag-hint">
+        Перетаскивай, чтобы изменить порядок. Первые 8 попадают на главный, остальные — под «+ ещё тема».
+      </div>
+
+      <div class="tag-list">
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">💩</span>
+          <div class="tag-row-main"><span class="tag-row-label">Стул</span></div>
+          <span class="tag-row-badge">1</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🍽</span>
+          <div class="tag-row-main"><span class="tag-row-label">Еда</span></div>
+          <span class="tag-row-badge">2</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">⚡</span>
+          <div class="tag-row-main"><span class="tag-row-label">Реакция</span></div>
+          <span class="tag-row-badge">3</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">😊</span>
+          <div class="tag-row-main"><span class="tag-row-label">Настроение</span></div>
+          <span class="tag-row-badge">4</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🌙</span>
+          <div class="tag-row-main"><span class="tag-row-label">Сон</span></div>
+          <span class="tag-row-badge">5</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">💊</span>
+          <div class="tag-row-main"><span class="tag-row-label">Лекарства</span></div>
+          <span class="tag-row-badge">6</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🩺</span>
+          <div class="tag-row-main"><span class="tag-row-label">Симптом</span></div>
+          <span class="tag-row-badge">7</span>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">💧</span>
+          <div class="tag-row-main"><span class="tag-row-label">Напиток</span></div>
+          <span class="tag-row-badge">8</span>
+        </div>
+
+        <div class="cutoff">Под «+ ещё тема»</div>
+
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🏃</span>
+          <div class="tag-row-main"><span class="tag-row-label">Активность</span></div>
+        </div>
+        <div class="tag-row off">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check" aria-hidden="true"></span>
+          <span class="tag-icon">🌡</span>
+          <div class="tag-row-main"><span class="tag-row-label">Температура</span></div>
+        </div>
+        <div class="tag-row off">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check" aria-hidden="true"></span>
+          <span class="tag-icon">💦</span>
+          <div class="tag-row-main"><span class="tag-row-label">Потоотделение</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 3 — Состояние drag (одна строка в движении)
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 3 · Drag-состояние (перетаскивание)</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Темы на главном</h1>
+      </header>
+
+      <div class="tag-list">
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">💩</span>
+          <div class="tag-row-main"><span class="tag-row-label">Стул</span></div>
+        </div>
+        <div class="tag-row dragging">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🩺</span>
+          <div class="tag-row-main"><span class="tag-row-label">Симптом</span></div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">🍽</span>
+          <div class="tag-row-main"><span class="tag-row-label">Еда</span></div>
+        </div>
+        <div class="tag-row">
+          <span class="drag-handle" aria-hidden="true">⋮<br/>⋮</span>
+          <span class="tag-check on" aria-hidden="true"></span>
+          <span class="tag-icon">⚡</span>
+          <div class="tag-row-main"><span class="tag-row-label">Реакция</span></div>
+        </div>
+      </div>
+    </div>
+
+  </body>
+</html>

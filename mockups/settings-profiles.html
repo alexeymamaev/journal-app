@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sandbox · Профили</title>
+    <link rel="stylesheet" href="../style.css" />
+    <style>
+      body {
+        background: #e9e7e0;
+        padding: 24px 16px 80px;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+      .mockup-label {
+        font-size: 12px;
+        color: var(--ink-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 28px 0 8px 4px;
+      }
+      .mockup-label:first-child { margin-top: 0; }
+      .mockup {
+        background: var(--bg);
+        border-radius: 18px;
+        padding: 14px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+
+      .sg-label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-muted);
+        margin: 18px 14px 6px;
+      }
+      .sg-label:first-of-type { margin-top: 4px; }
+      .sg-group {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .sg-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px;
+        min-height: 52px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        width: 100%;
+        background: transparent;
+        cursor: pointer;
+      }
+      .sg-row:last-child { border-bottom: 0; }
+      .sg-row:active { background: var(--surface-alt); }
+      .sg-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+      .sg-row-title { font-size: 16px; color: var(--ink); }
+      .sg-row-sub { font-size: 13px; color: var(--ink-muted); }
+      .sg-row-value { font-size: 15px; color: var(--ink-muted); }
+      .sg-row-chev { color: var(--ink-muted); font-size: 18px; line-height: 1; }
+      .sg-row.danger .sg-row-title { color: var(--danger); }
+      .sg-row.add .sg-row-title { color: var(--accent); }
+
+      .sg-dot {
+        width: 10px; height: 10px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+      }
+      .sg-dot.on { background: var(--accent); }
+      .sg-dot.off {
+        background: transparent;
+        border: 1.5px solid var(--border-strong);
+      }
+
+      .sub-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 2px 14px;
+      }
+      .sub-head h1 { margin: 0; font-size: 20px; flex: 1; }
+      .btn-back {
+        width: 40px; height: 40px;
+        font-size: 22px;
+        border-radius: 10px;
+      }
+      .btn-back:active { background: var(--surface-alt); }
+
+      /* --- форма в шапке детального экрана --- */
+      .sg-input-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        min-height: 52px;
+        border-bottom: 1px solid var(--border);
+      }
+      .sg-input-row:last-child { border-bottom: 0; }
+      .sg-input-row .lbl {
+        flex: 0 0 100px;
+        font-size: 14px;
+        color: var(--ink-muted);
+      }
+      .sg-input-row input[type="text"],
+      .sg-input-row input[type="number"] {
+        flex: 1;
+        padding: 8px 10px;
+        border: 0;
+        background: transparent;
+        font-size: 16px;
+        min-height: 32px;
+      }
+      .sg-input-row input:focus { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+
+      /* --- multi-checkbox список категорий --- */
+      .cat-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        min-height: 56px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+        text-align: left;
+        width: 100%;
+        cursor: pointer;
+      }
+      .cat-row:last-child { border-bottom: 0; }
+      .cat-row:active { background: var(--surface-alt); }
+      .cat-row.off .cat-main { opacity: 0.5; }
+
+      .cat-check {
+        width: 22px; height: 22px;
+        border-radius: 6px;
+        border: 1.5px solid var(--border-strong);
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--surface);
+        color: var(--accent-ink);
+        font-size: 14px;
+      }
+      .cat-check.on {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+      .cat-check.on::before { content: "✓"; }
+
+      .cat-icon { font-size: 20px; flex: 0 0 auto; }
+      .cat-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .cat-label { font-size: 16px; font-weight: 500; }
+      .cat-sub { font-size: 12px; color: var(--ink-muted); }
+
+      /* крошка категорий в sub-строке списка */
+      .cat-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .cat-chip {
+        font-size: 12px;
+        color: var(--ink-muted);
+        background: var(--surface-alt);
+        border: 1px solid var(--border);
+        padding: 2px 8px;
+        border-radius: 999px;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- ====================================================================
+         Вариант 1 — Список, один профиль
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 1 · Список, один профиль</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Профили</h1>
+      </header>
+
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <span class="sg-dot on" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Лёва</span>
+            <span class="sg-row-sub">3 года · ЖКТ · 7 тем</span>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row add" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">+ Добавить профиль</span>
+          </div>
+        </button>
+      </div>
+
+      <p class="muted" style="margin: 14px 14px 0; font-size: 13px;">
+        Профиль — это человек, за которым ведёшь наблюдения. У профиля одна или несколько категорий.
+        Активный профиль переключается кнопкой-именем в шапке главного экрана.
+      </p>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 2 — Два профиля
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 2 · Два профиля</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Профили</h1>
+      </header>
+
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <span class="sg-dot on" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Лёва</span>
+            <div class="cat-chips" style="margin-top: 4px">
+              <span class="cat-chip">ЖКТ</span>
+              <span class="cat-chip">Гомео</span>
+            </div>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row" type="button">
+          <span class="sg-dot off" aria-hidden="true"></span>
+          <div class="sg-row-main">
+            <span class="sg-row-title">Алексей</span>
+            <div class="cat-chips" style="margin-top: 4px">
+              <span class="cat-chip">Питание</span>
+            </div>
+          </div>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="sg-row add" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">+ Добавить профиль</span>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 3 — Детальный экран профиля: имя, возраст, multi-категории
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 3 · Детальный экран профиля</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Лёва</h1>
+      </header>
+
+      <div class="sg-label">О профиле</div>
+      <div class="sg-group">
+        <div class="sg-input-row">
+          <span class="lbl">Имя</span>
+          <input type="text" value="Лёва" />
+        </div>
+        <div class="sg-input-row">
+          <span class="lbl">Возраст</span>
+          <input type="text" value="3 года" />
+        </div>
+      </div>
+
+      <div class="sg-label">Категории</div>
+      <div class="sg-group">
+        <div class="cat-row">
+          <span class="cat-check on" aria-hidden="true"></span>
+          <span class="cat-icon">🟢</span>
+          <div class="cat-main">
+            <span class="cat-label">ЖКТ</span>
+            <span class="cat-sub">пищеварение, стул, реакции на еду</span>
+          </div>
+        </div>
+        <div class="cat-row off">
+          <span class="cat-check" aria-hidden="true"></span>
+          <span class="cat-icon">🍏</span>
+          <div class="cat-main">
+            <span class="cat-label">Питание</span>
+            <span class="cat-sub">еда, реакции, настроение</span>
+          </div>
+        </div>
+        <div class="cat-row">
+          <span class="cat-check on" aria-hidden="true"></span>
+          <span class="cat-icon">🌿</span>
+          <div class="cat-main">
+            <span class="cat-label">Гомео</span>
+            <span class="cat-sub">для разговора с гомеопатом</span>
+          </div>
+        </div>
+        <div class="cat-row off">
+          <span class="cat-check" aria-hidden="true"></span>
+          <span class="cat-icon">⚪</span>
+          <div class="cat-main">
+            <span class="cat-label">Общее</span>
+            <span class="cat-sub">базовое самочувствие</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sg-label">Темы</div>
+      <div class="sg-group">
+        <button class="sg-row" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Темы на главном</span>
+            <span class="sg-row-sub">из выбранных категорий</span>
+          </div>
+          <span class="sg-row-value">7 из 7</span>
+          <span class="sg-row-chev" aria-hidden="true">›</span>
+        </button>
+      </div>
+
+      <div class="sg-label" style="visibility: hidden">&nbsp;</div>
+      <div class="sg-group">
+        <button class="sg-row danger" type="button">
+          <div class="sg-row-main">
+            <span class="sg-row-title">Удалить профиль</span>
+            <span class="sg-row-sub">записи этого профиля тоже удалятся</span>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         Вариант 4 — Добавление нового профиля
+         ==================================================================== -->
+    <div class="mockup-label">Вариант 4 · Новый профиль</div>
+    <div class="mockup">
+      <header class="sub-head">
+        <button class="btn-back" type="button">←</button>
+        <h1>Новый профиль</h1>
+      </header>
+
+      <div class="sg-label">О профиле</div>
+      <div class="sg-group">
+        <div class="sg-input-row">
+          <span class="lbl">Имя</span>
+          <input type="text" placeholder="например, Алексей" />
+        </div>
+        <div class="sg-input-row">
+          <span class="lbl">Возраст</span>
+          <input type="text" placeholder="по желанию" />
+        </div>
+      </div>
+
+      <div class="sg-label">Категории</div>
+      <div class="sg-group">
+        <div class="cat-row off">
+          <span class="cat-check" aria-hidden="true"></span>
+          <span class="cat-icon">🟢</span>
+          <div class="cat-main">
+            <span class="cat-label">ЖКТ</span>
+            <span class="cat-sub">пищеварение, стул, реакции на еду</span>
+          </div>
+        </div>
+        <div class="cat-row">
+          <span class="cat-check on" aria-hidden="true"></span>
+          <span class="cat-icon">🍏</span>
+          <div class="cat-main">
+            <span class="cat-label">Питание</span>
+            <span class="cat-sub">еда, реакции, настроение</span>
+          </div>
+        </div>
+        <div class="cat-row off">
+          <span class="cat-check" aria-hidden="true"></span>
+          <span class="cat-icon">🌿</span>
+          <div class="cat-main">
+            <span class="cat-label">Гомео</span>
+            <span class="cat-sub">для разговора с гомеопатом</span>
+          </div>
+        </div>
+        <div class="cat-row off">
+          <span class="cat-check" aria-hidden="true"></span>
+          <span class="cat-icon">⚪</span>
+          <div class="cat-main">
+            <span class="cat-label">Общее</span>
+            <span class="cat-sub">базовое самочувствие</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="muted" style="margin: 10px 14px 0; font-size: 13px;">
+        Минимум одна категория. Можно несколько — темы из них объединятся на главном.
+      </p>
+
+      <div style="display: flex; gap: 10px; margin-top: 18px">
+        <button class="btn-ghost" type="button">Отмена</button>
+        <button class="btn-primary" type="button" style="flex: 1">Создать профиль</button>
+      </div>
+    </div>
+
+  </body>
+</html>
