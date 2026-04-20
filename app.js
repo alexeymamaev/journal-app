@@ -133,6 +133,30 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pageshow', () => { ensureDbOpen().catch(() => {}); });
 
+// Просим у браузера persistent storage — иначе Safari может выгнать IndexedDB
+// при нехватке места, и все записи Лёвы исчезнут. Best-effort, не блокирует boot.
+async function requestPersistentStorage() {
+  if (!navigator.storage?.persist) return;
+  try {
+    const already = await navigator.storage.persisted?.();
+    if (already) return;
+    const granted = await navigator.storage.persist();
+    console.log(`[kidjournal] storage.persist granted: ${granted}`);
+  } catch (e) {
+    console.warn('[kidjournal] storage.persist failed:', e);
+  }
+}
+
+async function getStorageStatus() {
+  if (!navigator.storage?.persisted) return 'неизвестно';
+  try {
+    const persisted = await navigator.storage.persisted();
+    return persisted ? 'надёжное' : 'обычное';
+  } catch {
+    return 'неизвестно';
+  }
+}
+
 const CONFIG_ID = 1;
 
 async function loadConfig() {
@@ -268,6 +292,7 @@ const state = {
 async function boot(retry = 0) {
   try {
     await ensureDbOpen();
+    requestPersistentStorage();
     state.config = await loadConfig();
     if (!state.config) {
       startOnboarding();
@@ -825,6 +850,18 @@ async function renderSettings() {
     value: '0.6.0',
     staticRow: true,
   }));
+  const storageRow = sgRow({
+    title: 'Хранение',
+    value: '…',
+    sub: 'надёжное = Safari не выгонит при нехватке места',
+    staticRow: true,
+  });
+  aboutGroup.appendChild(storageRow);
+  (async () => {
+    const status = await getStorageStatus();
+    const valueEl = storageRow.querySelector('.sg-row-value');
+    if (valueEl) valueEl.textContent = status;
+  })();
   root.appendChild(aboutGroup);
 
   $('[data-back]', node).addEventListener('click', () => renderMain());
