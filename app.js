@@ -1,20 +1,58 @@
 'use strict';
 
-// ---------- visible error overlay (so mobile без DevTools тоже видно) ----------
+// ---------- visible error / status overlay (so mobile без DevTools тоже видно) ----------
 
-function showError(e) {
+function errBar() {
   let bar = document.getElementById('err-bar');
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'err-bar';
-    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;background:#a13030;color:#fff;padding:10px 14px;font:13px/1.4 -apple-system,sans-serif;z-index:9999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;padding:10px 14px;font:13px/1.4 -apple-system,sans-serif;color:#fff;z-index:9999;white-space:pre-wrap;max-height:40vh;overflow:auto';
     document.body.appendChild(bar);
   }
+  return bar;
+}
+
+function showError(e) {
+  const bar = errBar();
+  bar.style.background = '#a13030';
   const msg = e && e.stack ? e.stack : String(e);
   bar.textContent = (bar.textContent ? bar.textContent + '\n\n' : '') + msg;
 }
-window.addEventListener('error', (e) => showError(e.error || e.message));
-window.addEventListener('unhandledrejection', (e) => showError(e.reason || e));
+
+function showBanner(msg, { variant = 'info', autoHide = 0 } = {}) {
+  const bar = errBar();
+  bar.style.background = variant === 'ok' ? '#2d6a4f' : '#3b5a80';
+  bar.textContent = msg;
+  if (autoHide) {
+    const snapshot = msg;
+    setTimeout(() => {
+      const b = document.getElementById('err-bar');
+      if (b && b.textContent === snapshot) b.remove();
+    }, autoHide);
+  }
+}
+
+// WebKit роняет IndexedDB-соединение, если страница долго в фоне. Следующая же операция
+// падает с "UnknownError: Connection to Indexed Database server lost". Ловим именно это.
+function isIdbDisconnectError(e) {
+  if (!e) return false;
+  const name = e.name || '';
+  const msg = String(e.message || e);
+  if (name === 'DatabaseClosedError') return true;
+  return /Connection to Indexed Database server lost/i.test(msg);
+}
+
+async function handleGlobalError(rawErr, ev) {
+  if (isIdbDisconnectError(rawErr)) {
+    ev?.preventDefault?.();
+    await recoverDb();
+    return;
+  }
+  showError(rawErr);
+}
+window.addEventListener('error', (e) => handleGlobalError(e.error || e.message, e));
+window.addEventListener('unhandledrejection', (e) => handleGlobalError(e.reason || e, e));
 
 // ---------- DB ----------
 
@@ -68,7 +106,32 @@ db.version(2).stores({
   });
 });
 
-db.open().catch(err => showError(err));
+async function ensureDbOpen() {
+  if (db.isOpen()) return;
+  await db.open();
+}
+
+let recovering = false;
+async function recoverDb() {
+  if (recovering) return;
+  recovering = true;
+  showBanner('Переподключение к базе…');
+  try {
+    try { db.close(); } catch {}
+    await db.open();
+    showBanner('База снова на связи. Повтори действие.', { variant: 'ok', autoHide: 4000 });
+  } catch (e) {
+    showError(e);
+  } finally {
+    recovering = false;
+  }
+}
+
+// Safari убивает IDB-соединение пока страница в фоне — переоткрываем при возврате.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') ensureDbOpen().catch(() => {});
+});
+window.addEventListener('pageshow', () => { ensureDbOpen().catch(() => {}); });
 
 const CONFIG_ID = 1;
 
@@ -202,8 +265,9 @@ const state = {
 
 // ---------- boot ----------
 
-async function boot() {
+async function boot(retry = 0) {
   try {
+    await ensureDbOpen();
     state.config = await loadConfig();
     if (!state.config) {
       startOnboarding();
@@ -211,6 +275,10 @@ async function boot() {
       await renderMain();
     }
   } catch (e) {
+    if (isIdbDisconnectError(e) && retry < 2) {
+      await recoverDb();
+      return boot(retry + 1);
+    }
     showError(e);
   }
 }
