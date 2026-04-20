@@ -898,6 +898,20 @@ textarea:focus, input:focus { outline: 2px solid var(--focus); outline-offset: 1
 }
 .theme-btn:active:not(:disabled) { background: var(--surface-alt); }
 .theme-btn:disabled { color: var(--border-strong); }
+.theme-btn.theme-btn-text {
+  width: auto;
+  min-width: 44px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.theme-row.hidden-theme {
+  background: var(--surface-alt);
+}
+.theme-row.hidden-theme .theme-icon,
+.theme-row.hidden-theme .theme-row-label {
+  opacity: 0.65;
+}
 
 .cutoff {
   display: flex;

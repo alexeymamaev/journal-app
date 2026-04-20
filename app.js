@@ -228,16 +228,20 @@ function getProfileThemeKeys(profile) {
   return [...set];
 }
 
-// Порядок плиток на главном = пересечение mainTileOrder с доступными темами (+ добавить новые в конец).
+// Порядок плиток на главном = пересечение mainTileOrder с доступными темами минус явно скрытые;
+// новые темы, которые не в order и не в hidden, добавляются в конец.
 function getMainTileOrder(profile) {
   const available = new Set(getProfileThemeKeys(profile));
-  const ordered = (profile?.mainTileOrder || []).filter(k => available.has(k));
-  for (const k of available) if (!ordered.includes(k)) ordered.push(k);
+  const hidden = new Set(profile?.mainTileHidden || []);
+  const ordered = (profile?.mainTileOrder || []).filter(k => available.has(k) && !hidden.has(k));
+  for (const k of available) {
+    if (!hidden.has(k) && !ordered.includes(k)) ordered.push(k);
+  }
   return ordered;
 }
 
 function getMainTiles(profile) {
-  return getMainTileOrder(profile).slice(0, 8);
+  return getMainTileOrder(profile);
 }
 
 function eventSummary(ev) {
@@ -1051,39 +1055,57 @@ function renderSettingsThemes(profileId) {
   const profile = cfg.profiles.find(p => p.id === profileId);
   if (!profile) { renderSettings(); return; }
 
-  const available = new Set(getProfileThemeKeys(profile));
-  const order = (profile.mainTileOrder || []).filter(k => available.has(k));
-  for (const k of available) if (!order.includes(k)) order.push(k);
-  // всегда оставляем хоть одну включённой (чтобы главный не был пустым)
+  const available = getProfileThemeKeys(profile);
+  const hiddenList = (profile.mainTileHidden || []).filter(k => available.includes(k));
+  const hiddenSet = new Set(hiddenList);
+  const order = (profile.mainTileOrder || []).filter(k => available.includes(k) && !hiddenSet.has(k));
+  for (const k of available) {
+    if (!hiddenSet.has(k) && !order.includes(k)) order.push(k);
+  }
 
   const listEl = $('[data-list]', node);
 
-  const saveOrder = async () => {
-    const updated = { ...profile, mainTileOrder: order };
+  const saveState = async () => {
+    const updated = {
+      ...profile,
+      mainTileOrder: order.slice(),
+      mainTileHidden: hiddenList.slice(),
+    };
     const profiles = cfg.profiles.map(p => p.id === profileId ? updated : p);
     await saveConfig({ ...cfg, profiles });
     state.config = await loadConfig();
   };
 
+  function themeRow(key, { isHidden }) {
+    const t = window.TYPE_BY_KEY[key];
+    if (!t) return null;
+    const row = document.createElement('div');
+    row.className = 'theme-row' + (isHidden ? ' hidden-theme' : '');
+    row.dataset.key = key;
+    row.innerHTML = `
+      <span class="theme-icon">${t.icon}</span>
+      <div class="theme-row-main">
+        <span class="theme-row-label">${t.label}</span>
+        <span class="theme-row-sub">${escapeHtml(t.description || '')}</span>
+      </div>
+    `;
+    return row;
+  }
+
   function render() {
     listEl.innerHTML = '';
+
+    const visibleHdr = document.createElement('div');
+    visibleHdr.className = 'sg-label';
+    visibleHdr.textContent = `На главном · ${order.length}`;
+    listEl.appendChild(visibleHdr);
+
     order.forEach((key, idx) => {
-      const t = window.TYPE_BY_KEY[key];
-      if (!t) return;
-      const row = document.createElement('div');
-      row.className = 'theme-row';
-      row.draggable = true;
-      row.dataset.key = key;
-      row.innerHTML = `
-        <span class="drag-handle" aria-hidden="true">⋮⋮</span>
-        <span class="theme-icon">${t.icon}</span>
-        <div class="theme-row-main">
-          <span class="theme-row-label">${t.label}</span>
-          <span class="theme-row-sub">${escapeHtml(t.description || '')}</span>
-        </div>
-        ${idx < 8 ? `<span class="theme-row-badge">${idx + 1}</span>` : ''}
-      `;
-      // Кнопки «вверх/вниз» для мобильного (drag на iOS тяжёлый без dedicated lib)
+      const row = themeRow(key, { isHidden: false });
+      if (!row) return;
+      const ctrl = document.createElement('div');
+      ctrl.className = 'theme-ctrl';
+
       const up = document.createElement('button');
       up.type = 'button';
       up.className = 'theme-btn';
@@ -1092,9 +1114,10 @@ function renderSettingsThemes(profileId) {
       up.addEventListener('click', async () => {
         if (idx === 0) return;
         [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
-        await saveOrder();
+        await saveState();
         render();
       });
+
       const down = document.createElement('button');
       down.type = 'button';
       down.className = 'theme-btn';
@@ -1103,23 +1126,58 @@ function renderSettingsThemes(profileId) {
       down.addEventListener('click', async () => {
         if (idx === order.length - 1) return;
         [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
-        await saveOrder();
+        await saveState();
         render();
       });
-      const ctrl = document.createElement('div');
-      ctrl.className = 'theme-ctrl';
+
+      const hide = document.createElement('button');
+      hide.type = 'button';
+      hide.className = 'theme-btn theme-btn-text';
+      hide.textContent = 'Скрыть';
+      hide.addEventListener('click', async () => {
+        if (order.length === 1) {
+          alert('Нужна хотя бы одна тема на главном.');
+          return;
+        }
+        order.splice(idx, 1);
+        hiddenList.push(key);
+        hiddenSet.add(key);
+        await saveState();
+        render();
+      });
+
       ctrl.appendChild(up);
       ctrl.appendChild(down);
+      ctrl.appendChild(hide);
       row.appendChild(ctrl);
       listEl.appendChild(row);
-
-      if (idx === 7 && order.length > 8) {
-        const cutoff = document.createElement('div');
-        cutoff.className = 'cutoff';
-        cutoff.textContent = 'Под «+ ещё тема»';
-        listEl.appendChild(cutoff);
-      }
     });
+
+    if (hiddenList.length > 0) {
+      const hiddenHdr = document.createElement('div');
+      hiddenHdr.className = 'sg-label';
+      hiddenHdr.textContent = `Скрытые · ${hiddenList.length}`;
+      listEl.appendChild(hiddenHdr);
+
+      hiddenList.slice().forEach((key) => {
+        const row = themeRow(key, { isHidden: true });
+        if (!row) return;
+        const show = document.createElement('button');
+        show.type = 'button';
+        show.className = 'theme-btn theme-btn-text';
+        show.textContent = 'На главный';
+        show.addEventListener('click', async () => {
+          const i = hiddenList.indexOf(key);
+          if (i >= 0) hiddenList.splice(i, 1);
+          hiddenSet.delete(key);
+          order.push(key);
+          await saveState();
+          render();
+        });
+        row.appendChild(show);
+        listEl.appendChild(row);
+      });
+    }
   }
   render();
 
