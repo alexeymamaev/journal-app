@@ -1471,25 +1471,136 @@ async function renderHistory() {
     .toArray();
   records.sort((a,b) => (b.sortMoment > a.sortMoment ? 1 : -1));
   const list = $('[data-records]', node);
+  const strip = $('[data-day-strip]', node);
+  const stripInner = $('[data-day-strip-inner]', node);
+
   if (records.length === 0) {
     list.innerHTML = '<p class="muted empty">Пока пусто.</p>';
   } else {
+    const filledDays = new Set();
+    for (const r of records) filledDays.add(dayKey(r.sortMoment));
+
     let lastDay = null;
     for (const r of records) {
       const day = new Date(r.sortMoment).toDateString();
       if (day !== lastDay) {
         const hdr = document.createElement('h3');
         hdr.className = 'day-header';
+        hdr.dataset.dayKey = dayKey(r.sortMoment);
         hdr.textContent = fmtDayHeader(r.sortMoment);
         list.appendChild(hdr);
         lastDay = day;
       }
       list.appendChild(await renderRecordCard(r));
     }
+
+    renderDayStrip(stripInner, filledDays, 60, (key) => onDayChipTap(key, list, stripInner));
+    strip.classList.remove('hidden');
   }
+
   $('[data-back]', node).addEventListener('click', () => renderMain());
   $('[data-export]', node).addEventListener('click', () => openExport());
   setScreen(node);
+
+  if (records.length) {
+    requestAnimationFrame(() => {
+      stripInner.scrollLeft = stripInner.scrollWidth;
+      const firstKey = list.querySelector('.day-header')?.dataset.dayKey;
+      if (firstKey) {
+        stripInner.querySelectorAll('.day-chip').forEach(c => {
+          c.classList.toggle('active', c.dataset.dayKey === firstKey);
+        });
+      }
+      setupDayStripObserver(list, stripInner);
+    });
+  }
+}
+
+function dayKey(iso) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const WEEKDAY_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+function renderDayStrip(root, filledDays, daysBack, onTap) {
+  root.innerHTML = '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayKey = dayKey(today.toISOString());
+  for (let i = daysBack - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = dayKey(d.toISOString());
+    const isToday = key === todayKey;
+    const isFilled = filledDays.has(key);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'day-chip' + (isToday ? ' today' : '') + (isFilled ? ' filled' : '');
+    btn.dataset.dayKey = key;
+    const wd = document.createElement('span');
+    wd.className = 'day-chip-wd';
+    wd.textContent = WEEKDAY_RU[d.getDay()];
+    const circle = document.createElement('span');
+    circle.className = 'day-chip-circle';
+    circle.textContent = d.getDate();
+    btn.appendChild(wd);
+    btn.appendChild(circle);
+    btn.addEventListener('click', () => onTap(key));
+    root.appendChild(btn);
+  }
+}
+
+function onDayChipTap(key, list, stripInner) {
+  const header = list.querySelector(`.day-header[data-day-key="${key}"]`);
+  const chip = stripInner.querySelector(`.day-chip[data-day-key="${key}"]`);
+  if (!header) {
+    // пустой день — короткий bounce, чтобы стало понятно «здесь ничего нет»
+    if (chip) {
+      chip.classList.remove('bump');
+      void chip.offsetWidth;
+      chip.classList.add('bump');
+    }
+    return;
+  }
+  header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  header.classList.remove('flash');
+  void header.offsetWidth;
+  header.classList.add('flash');
+  setActiveChip(stripInner, key);
+}
+
+function setActiveChip(stripInner, key) {
+  stripInner.querySelectorAll('.day-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.dayKey === key);
+  });
+  const active = stripInner.querySelector('.day-chip.active');
+  if (!active) return;
+  const sRect = stripInner.getBoundingClientRect();
+  const aRect = active.getBoundingClientRect();
+  if (aRect.left < sRect.left + 20 || aRect.right > sRect.right - 20) {
+    active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }
+}
+
+function setupDayStripObserver(list, stripInner) {
+  if (!('IntersectionObserver' in window)) return;
+  const headers = list.querySelectorAll('.day-header');
+  if (!headers.length) return;
+  const observer = new IntersectionObserver((entries) => {
+    let topMost = null;
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      if (!topMost || e.boundingClientRect.top < topMost.boundingClientRect.top) {
+        topMost = e;
+      }
+    }
+    if (topMost?.target.dataset.dayKey) setActiveChip(stripInner, topMost.target.dataset.dayKey);
+  }, {
+    rootMargin: '-80px 0px -70% 0px',
+    threshold: 0,
+  });
+  headers.forEach(h => observer.observe(h));
 }
 
 function fmtDayHeader(iso) {

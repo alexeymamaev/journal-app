@@ -1,4 +1,4 @@
-const CACHE = 'kidjournal-v5-7';
+const CACHE = 'kidjournal-v5-8';
 const ASSETS = [
   './',
   'index.html',
