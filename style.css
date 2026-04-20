@@ -419,7 +419,8 @@ textarea:focus, input:focus { outline: 2px solid var(--focus); outline-offset: 1
   display: flex;
   gap: 4px;
   overflow-x: auto;
-  padding: 2px 14px;
+  overflow-y: visible;
+  padding: 6px 14px;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -466,20 +467,18 @@ textarea:focus, input:focus { outline: 2px solid var(--focus); outline-offset: 1
 }
 .day-chip.filled .day-chip-wd { color: var(--ink); }
 
+/* Today = зелёная заливка + 2px прозрачный гэп + внешнее тёмно-зелёное кольцо */
 .day-chip.today .day-chip-wd { color: var(--ink); font-weight: 600; }
 .day-chip.today .day-chip-circle {
-  border-width: 2px;
-  border-color: var(--ink);
-  color: var(--ink);
-  font-weight: 600;
-}
-.day-chip.today.filled .day-chip-circle {
+  background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #1f4f28;
 }
 
-.day-chip.active .day-chip-wd { color: var(--accent); font-weight: 600; }
-.day-chip.active .day-chip-circle { box-shadow: 0 0 0 2px var(--accent); }
+.day-chip.active:not(.today) .day-chip-wd { color: var(--accent); font-weight: 600; }
+.day-chip.active:not(.today) .day-chip-circle { box-shadow: 0 0 0 2px var(--accent); }
 
 .day-chip:active .day-chip-circle { transform: scale(0.92); }
 .day-chip.bump .day-chip-circle { animation: chip-bump 0.32s ease; }

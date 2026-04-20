@@ -1501,6 +1501,7 @@ async function renderHistory() {
   $('[data-back]', node).addEventListener('click', () => renderMain());
   $('[data-export]', node).addEventListener('click', () => openExport());
   setScreen(node);
+  window.scrollTo(0, 0);
 
   if (records.length) {
     requestAnimationFrame(() => {
