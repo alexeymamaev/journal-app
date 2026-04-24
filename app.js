@@ -412,13 +412,12 @@ function renderOnboarding() {
   state.screen = 'onboarding';
   const node = cloneTpl('tpl-onboarding');
   const step = state.onb.step;
-  const titles = ['Профиль', 'Категории', 'Темы на главном'];
+  const titles = ['Профиль', 'Что будешь отмечать'];
   const subs = [
-    'Кого будем наблюдать.',
-    'Под что наблюдаем. Можно выбрать несколько.',
-    'Что будет на главном экране. Можно менять позже.',
+    'Кого наблюдаем. Имя и короткое описание.',
+    'Тап по категории — включит её набор. Или выбери темы по одной.',
   ];
-  $('[data-step]', node).textContent = `Шаг ${step + 1} из 3`;
+  $('[data-step]', node).textContent = `Шаг ${step + 1} из 2`;
   $('[data-title]', node).textContent = titles[step];
   $('[data-sub]', node).textContent = subs[step];
 
@@ -435,56 +434,7 @@ function renderOnboarding() {
       </label>
     `;
   } else if (step === 1) {
-    const grid = document.createElement('div');
-    grid.className = 'tile-grid';
-    for (const c of window.CATEGORIES) {
-      const selected = state.onb.categories.includes(c.key);
-      const tile = document.createElement('button');
-      tile.type = 'button';
-      tile.className = 'tile' + (selected ? ' selected' : '');
-      tile.dataset.category = c.key;
-      tile.innerHTML = `
-        <span class="tile-icon">${c.icon}</span>
-        <span class="tile-label">${c.label}</span>
-        <span class="tile-sub">${c.description}</span>
-      `;
-      tile.addEventListener('click', () => {
-        const set = new Set(state.onb.categories);
-        if (set.has(c.key)) set.delete(c.key); else set.add(c.key);
-        state.onb.categories = [...set];
-        renderOnboarding();
-      });
-      grid.appendChild(tile);
-    }
-    body.appendChild(grid);
-  } else if (step === 2) {
-    const themeKeys = unionThemeKeysFromCategories(state.onb.categories);
-    if (state.onb.themes.length === 0) {
-      state.onb.themes = themeKeys.slice(); // default — все
-    }
-    const grid = document.createElement('div');
-    grid.className = 'tile-grid';
-    for (const k of themeKeys) {
-      const t = window.TYPE_BY_KEY[k];
-      if (!t) continue;
-      const selected = state.onb.themes.includes(k);
-      const tile = document.createElement('button');
-      tile.type = 'button';
-      tile.className = 'tile' + (selected ? ' selected' : '');
-      tile.innerHTML = `
-        <span class="tile-icon">${t.icon}</span>
-        <span class="tile-label">${t.label}</span>
-        <span class="tile-sub">${t.description}</span>
-      `;
-      tile.addEventListener('click', () => {
-        const set = new Set(state.onb.themes);
-        if (set.has(k)) set.delete(k); else set.add(k);
-        state.onb.themes = [...set];
-        renderOnboarding();
-      });
-      grid.appendChild(tile);
-    }
-    body.appendChild(grid);
+    renderOnboardingThemesStep(body);
   }
 
   const back = $('[data-back]', node);
@@ -510,7 +460,7 @@ function renderOnboarding() {
     state.onb.step = Math.max(0, step - 1);
     renderOnboarding();
   });
-  next.textContent = step === 2 ? 'Готово' : 'Далее';
+  next.textContent = step === 1 ? 'Начать' : 'Далее';
   next.addEventListener('click', async () => {
     if (step === 0) {
       const name = $('#onb-name').value.trim();
@@ -520,18 +470,84 @@ function renderOnboarding() {
       state.onb.description = description;
       state.onb.step = 1;
       renderOnboarding();
-    } else if (step === 1) {
-      if (state.onb.categories.length === 0) { alert('Выбери хотя бы одну категорию'); return; }
-      state.onb.step = 2;
-      state.onb.themes = []; // reset — пересчитать default под новые категории
-      renderOnboarding();
     } else {
-      if (state.onb.themes.length === 0) { alert('Выбери хотя бы одну тему'); return; }
+      if (state.onb.themes.length === 0) { alert('Добавь хотя бы одну тему'); return; }
       await finishOnboarding();
     }
   });
 
   setScreen(node);
+}
+
+// v3: онбординг шаг 2 — карточки категорий-пресетов + полный список тем с UISwitch.
+// То же что «+ Добавить» sheet в Profile detail, но в full-screen form.
+function renderOnboardingThemesStep(body) {
+  const activeSet = new Set(state.onb.themes);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'onb-themes';
+
+  const catsLbl = document.createElement('div');
+  catsLbl.className = 'v3-sheet-section-lbl';
+  catsLbl.textContent = 'КАТЕГОРИИ-ПРЕСЕТЫ';
+  wrap.appendChild(catsLbl);
+
+  const catsCard = document.createElement('div');
+  catsCard.className = 'v3-cats-card';
+  for (const c of window.CATEGORIES) {
+    const themes = c.themes || c.activeTypes || [];
+    const onCount = themes.filter(k => activeSet.has(k)).length;
+    const row = document.createElement('div');
+    row.className = 'v3-cat-row';
+    row.innerHTML = `
+      <span class="v3-cat-icon">${c.icon}</span>
+      <div class="v3-cat-info">
+        <span class="v3-cat-label">${escapeHtml(c.label)}</span>
+        <span class="v3-cat-sub">${themes.length} тем · ${escapeHtml(c.description || '')}</span>
+      </div>
+      <button type="button" class="link">${onCount === themes.length ? '✓ Все' : '+ Все'}</button>
+    `;
+    row.querySelector('button').addEventListener('click', () => {
+      const preset = c.themes || c.activeTypes || [];
+      const set = new Set(state.onb.themes);
+      for (const k of preset) set.add(k);
+      state.onb.themes = [...set];
+      renderOnboarding();
+    });
+    catsCard.appendChild(row);
+  }
+  wrap.appendChild(catsCard);
+
+  const themesLbl = document.createElement('div');
+  themesLbl.className = 'v3-sheet-section-lbl';
+  themesLbl.textContent = `ВЫБРАНО · ${state.onb.themes.length} ИЗ ${window.TYPES.length}`;
+  wrap.appendChild(themesLbl);
+
+  const themesCard = document.createElement('div');
+  themesCard.className = 'v3-themes-card';
+  for (const t of window.TYPES) {
+    const isOn = activeSet.has(t.key);
+    const row = document.createElement('div');
+    row.className = 'v3-theme-toggle-row';
+    row.innerHTML = `
+      <span class="v3-theme-icon">${t.icon}</span>
+      <span class="v3-theme-label">${escapeHtml(t.label)}</span>
+      <button type="button" class="uiswitch ${isOn ? 'on' : 'off'}">
+        <span class="uiswitch-knob"></span>
+      </button>
+    `;
+    row.querySelector('.uiswitch').addEventListener('click', () => {
+      const set = new Set(state.onb.themes);
+      if (set.has(t.key)) set.delete(t.key);
+      else set.add(t.key);
+      state.onb.themes = [...set];
+      renderOnboarding();
+    });
+    themesCard.appendChild(row);
+  }
+  wrap.appendChild(themesCard);
+
+  body.appendChild(wrap);
 }
 
 // v2-compat: старое имя, делегирует в v3-версию.
@@ -582,6 +598,59 @@ async function finishOnboarding() {
 
 // ---------- main screen ----------
 
+// v3 баннеры на главной: пустой профиль, новые темы в types.js.
+// Возвращает DOM-ноду с баннером(ами) или null.
+function renderV3Banners(profile) {
+  const cfg = state.config;
+  const dismissed = new Set(cfg.dismissedThemeBanners || []);
+  const profileThemes = new Set(profile.themes || []);
+  const newThemes = window.TYPES.filter(t => !profileThemes.has(t.key) && !dismissed.has(t.key));
+
+  const isEmpty = (profile.themes || []).length === 0;
+  if (!isEmpty && newThemes.length === 0) return null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'v3-banner-wrap';
+
+  if (isEmpty) {
+    const b = document.createElement('div');
+    b.className = 'v3-banner v3-banner-empty';
+    b.innerHTML = `
+      <span class="v3-banner-icon">📭</span>
+      <div class="v3-banner-body">
+        <span class="v3-banner-title">В профиле нет тем</span>
+        <span class="v3-banner-sub">Добавь набор из категории или выбери темы по одной.</span>
+      </div>
+      <button type="button" class="link" data-open-add>Открыть</button>
+    `;
+    b.querySelector('[data-open-add]').addEventListener('click', () => openAddThemesSheet(profile.id));
+    wrap.appendChild(b);
+  } else if (newThemes.length > 0) {
+    const names = newThemes.map(t => t.label).join(', ');
+    const b = document.createElement('div');
+    b.className = 'v3-banner v3-banner-new';
+    b.innerHTML = `
+      <span class="v3-banner-icon">✨</span>
+      <div class="v3-banner-body">
+        <span class="v3-banner-title">Новая тема: ${escapeHtml(names)}</span>
+        <span class="v3-banner-sub">Добавь в профиль если нужно.</span>
+      </div>
+      <button type="button" class="link" data-open-add>Открыть</button>
+      <button type="button" class="link muted" data-dismiss>Позже</button>
+    `;
+    b.querySelector('[data-open-add]').addEventListener('click', () => openAddThemesSheet(profile.id));
+    b.querySelector('[data-dismiss]').addEventListener('click', async () => {
+      const updatedDismiss = [...dismissed, ...newThemes.map(t => t.key)];
+      await saveConfig({ ...cfg, dismissedThemeBanners: updatedDismiss });
+      state.config = await loadConfig();
+      await renderMain();
+    });
+    wrap.appendChild(b);
+  }
+
+  return wrap;
+}
+
 async function renderMain() {
   state.screen = 'main';
   const node = cloneTpl('tpl-main');
@@ -591,6 +660,13 @@ async function renderMain() {
   $('[data-profile-name]', node).textContent = profile.name;
   $('[data-profile-switcher]', node).addEventListener('click', () => openProfileSwitcher());
   $('[data-settings]', node).addEventListener('click', () => renderSettings());
+
+  // v3 баннеры — пустой профиль / новые темы в types.js
+  const v3Banners = renderV3Banners(profile);
+  if (v3Banners) {
+    const head = $('.main-head', node);
+    head.after(v3Banners);
+  }
 
   // draft recovery
   const draft = await db.records
@@ -1153,15 +1229,208 @@ function renderSettingsProfile(profileId) {
   setScreen(node);
 }
 
-// Stubs for v3 sheets — to be implemented in follow-up tasks.
+// v3: Field-toggle bottom sheet — per-profile on/off для optional полей темы.
+// Required поля показаны disabled'ом с лейблом «обязательно».
+// Save-on-toggle: каждый клик пишет в profile.themeFieldOverrides[themeKey][fieldKey].
 function openFieldToggleSheet(profileId, themeKey) {
-  const t = window.TYPE_BY_KEY[themeKey];
-  if (!t) return;
-  alert(`Поля · ${t.label}\n\nЭкран настройки полей темы — в разработке.\n\nПока поля включены все по умолчанию.`);
+  const type = window.TYPE_BY_KEY[themeKey];
+  if (!type) return;
+  const cfg = state.config;
+  const profile = cfg.profiles.find(p => p.id === profileId);
+  if (!profile) return;
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'v3-sheet-backdrop';
+  const sheet = document.createElement('div');
+  sheet.className = 'v3-sheet';
+  backdrop.appendChild(sheet);
+
+  const close = () => backdrop.remove();
+
+  function render() {
+    const overrides = (profile.themeFieldOverrides || {})[themeKey] || {};
+    sheet.innerHTML = `
+      <div class="v3-sheet-handle" aria-hidden="true"></div>
+      <div class="v3-sheet-title-row">
+        <h2>Поля · ${escapeHtml(type.label)}</h2>
+        <button type="button" class="link" data-done>Готово</button>
+      </div>
+      <p class="v3-sheet-hint">Что показывать в форме записи для этого профиля. Обязательные нельзя выключить.</p>
+      <div class="v3-fields-card"></div>
+    `;
+    const card = sheet.querySelector('.v3-fields-card');
+    for (const f of type.fields) {
+      const row = document.createElement('div');
+      row.className = 'v3-field-row';
+      const optionsText = fieldOptionsText(f);
+      row.innerHTML = `
+        <div class="v3-field-info">
+          <span class="v3-field-title">${escapeHtml(f.label)}</span>
+          ${optionsText ? `<span class="v3-field-sub">${escapeHtml(optionsText)}</span>` : ''}
+        </div>
+      `;
+      if (f.required) {
+        const tag = document.createElement('span');
+        tag.className = 'v3-field-required';
+        tag.textContent = 'обязательно';
+        row.appendChild(tag);
+      } else {
+        const isOff = overrides[f.key] === false;
+        const sw = document.createElement('button');
+        sw.type = 'button';
+        sw.className = 'uiswitch ' + (isOff ? 'off' : 'on');
+        sw.innerHTML = '<span class="uiswitch-knob"></span>';
+        sw.dataset.field = f.key;
+        row.appendChild(sw);
+      }
+      card.appendChild(row);
+    }
+  }
+
+  sheet.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-done]')) { close(); return; }
+    const swBtn = e.target.closest('[data-field]');
+    if (!swBtn) return;
+    const fieldKey = swBtn.dataset.field;
+    const curProfile = state.config.profiles.find(p => p.id === profileId);
+    const overrides = { ...(curProfile.themeFieldOverrides || {}) };
+    const themeOv = { ...(overrides[themeKey] || {}) };
+    const currentlyOff = themeOv[fieldKey] === false;
+    if (currentlyOff) {
+      delete themeOv[fieldKey]; // включить = убрать override
+    } else {
+      themeOv[fieldKey] = false;
+    }
+    if (Object.keys(themeOv).length === 0) {
+      delete overrides[themeKey];
+    } else {
+      overrides[themeKey] = themeOv;
+    }
+    await saveProfilePatch(profileId, { themeFieldOverrides: overrides });
+    // update local reference
+    Object.assign(profile, state.config.profiles.find(p => p.id === profileId));
+    render();
+  });
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  render();
+  document.body.appendChild(backdrop);
 }
 
+// Хелпер: формирует строку опций поля для подписи (e.g. «норма / запор / диарея»).
+function fieldOptionsText(f) {
+  if (f.kind === 'text') return 'свободный текст';
+  if (Array.isArray(f.options)) {
+    return f.options.map(o => o.label).join(' / ');
+  }
+  return '';
+}
+
+// v3: «+ Добавить» sheet — категории-пресеты + плоский список всех тем.
 function openAddThemesSheet(profileId) {
-  alert('«+ Добавить» sheet — в разработке.\n\nПока включай/выключай темы свитчами в списке ниже: все 7 встроенных тем показаны (on = в профиле, off = не в профиле).');
+  const cfg = state.config;
+  const profile = cfg.profiles.find(p => p.id === profileId);
+  if (!profile) return;
+
+  // Работаем с локальной копией tempThemes, коммитим на Готово.
+  let tempThemes = (profile.themes || []).slice();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'v3-sheet-backdrop';
+  const sheet = document.createElement('div');
+  sheet.className = 'v3-sheet v3-sheet-tall';
+  backdrop.appendChild(sheet);
+
+  const close = () => backdrop.remove();
+
+  function render() {
+    const activeSet = new Set(tempThemes);
+    sheet.innerHTML = `
+      <div class="v3-sheet-handle" aria-hidden="true"></div>
+      <div class="v3-sheet-title-row">
+        <h2>Добавить темы</h2>
+        <button type="button" class="link" data-apply>Готово</button>
+      </div>
+      <p class="v3-sheet-hint">Тап «+ Все» — включит весь пресет категории. Или выбери по одной ниже.</p>
+      <div class="v3-sheet-section-lbl">КАТЕГОРИИ-ПРЕСЕТЫ</div>
+      <div class="v3-cats-card"></div>
+      <div class="v3-sheet-section-lbl">ВСЕ ТЕМЫ</div>
+      <div class="v3-themes-card"></div>
+    `;
+
+    const catsCard = sheet.querySelector('.v3-cats-card');
+    for (const c of window.CATEGORIES) {
+      const themes = c.themes || c.activeTypes || [];
+      const onCount = themes.filter(k => activeSet.has(k)).length;
+      const row = document.createElement('div');
+      row.className = 'v3-cat-row';
+      row.innerHTML = `
+        <span class="v3-cat-icon">${c.icon}</span>
+        <div class="v3-cat-info">
+          <span class="v3-cat-label">${escapeHtml(c.label)}</span>
+          <span class="v3-cat-sub">${themes.length} тем · ${escapeHtml(c.description || '')}</span>
+        </div>
+        <button type="button" class="link" data-preset="${escapeHtml(c.key)}">
+          ${onCount === themes.length ? '✓ Все' : '+ Все'}
+        </button>
+      `;
+      catsCard.appendChild(row);
+    }
+
+    const themesCard = sheet.querySelector('.v3-themes-card');
+    for (const t of window.TYPES) {
+      const isOn = activeSet.has(t.key);
+      const row = document.createElement('div');
+      row.className = 'v3-theme-toggle-row';
+      row.innerHTML = `
+        <span class="v3-theme-icon">${t.icon}</span>
+        <span class="v3-theme-label">${escapeHtml(t.label)}</span>
+        <button type="button" class="uiswitch ${isOn ? 'on' : 'off'}" data-theme="${escapeHtml(t.key)}">
+          <span class="uiswitch-knob"></span>
+        </button>
+      `;
+      themesCard.appendChild(row);
+    }
+  }
+
+  sheet.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-apply]')) {
+      await saveProfilePatch(profileId, { themes: tempThemes });
+      close();
+      renderSettingsProfile(profileId);
+      return;
+    }
+    const presetBtn = e.target.closest('[data-preset]');
+    if (presetBtn) {
+      const c = window.CATEGORY_BY_KEY[presetBtn.dataset.preset];
+      if (!c) return;
+      const preset = c.themes || c.activeTypes || [];
+      const set = new Set(tempThemes);
+      for (const k of preset) set.add(k);
+      tempThemes = [...set];
+      render();
+      return;
+    }
+    const swBtn = e.target.closest('[data-theme]');
+    if (swBtn) {
+      const key = swBtn.dataset.theme;
+      const idx = tempThemes.indexOf(key);
+      if (idx >= 0) tempThemes.splice(idx, 1);
+      else tempThemes.push(key);
+      render();
+      return;
+    }
+  });
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  render();
+  document.body.appendChild(backdrop);
 }
 
 // v3: экран «Темы на главном» (renderSettingsThemes) удалён.
@@ -1208,7 +1477,12 @@ function renderSheet() {
   $('[data-sheet-desc]', node).textContent = type.description;
 
   const body = $('[data-fields]', node);
+  const activeProfile = getActiveProfile();
+  const overrides = activeProfile?.themeFieldOverrides?.[st.typeKey] || {};
   for (const f of type.fields) {
+    // v3: optional поле может быть выключено на уровне профиля.
+    // Required поля игнорируют override.
+    if (!f.required && overrides[f.key] === false) continue;
     body.appendChild(renderField(f));
   }
 
@@ -1793,6 +2067,9 @@ function buildTxt(meta, periodKey, data) {
   const lines = [];
   lines.push(`Журнал · ${profile.name}`);
   lines.push(`Профиль: ${profileSummaryLine(profile)}`);
+  if (meta.templateKey && meta.templateKey !== 'free') {
+    lines.push(`Шаблон: ${TEMPLATE_LABELS[meta.templateKey] || meta.templateKey}`);
+  }
   const effFrom = fromIso || (records[0] && records[0].sortMoment) || toIso;
   lines.push(`Период: ${periodLabel} (${fmtExportDateShort(effFrom)} – ${fmtExportDateShort(toIso)})`);
   lines.push(`Записей: ${records.length} · событий: ${totalEvents}`);
@@ -1862,12 +2139,16 @@ function renderExportDom(meta, periodKey, data) {
   const metaEl = document.createElement('div');
   metaEl.className = 'export-meta';
   const effFrom = fromIso || (records[0] && records[0].sortMoment) || toIso;
+  const tplLabel = meta.templateKey && meta.templateKey !== 'free'
+    ? TEMPLATE_LABELS[meta.templateKey] || meta.templateKey
+    : null;
   metaEl.innerHTML = [
     `Профиль: ${escapeHtml(profileSummaryLine(profile))}`,
+    tplLabel ? `Шаблон: ${escapeHtml(tplLabel)}` : null,
     `Период: ${periodLabel} (${fmtExportDateShort(effFrom)} – ${fmtExportDateShort(toIso)})`,
     `Записей: ${records.length} · событий: ${totalEvents}`,
     `Экспорт: ${fmtExportNow()}`,
-  ].map(l => `<div>${l}</div>`).join('');
+  ].filter(Boolean).map(l => `<div>${l}</div>`).join('');
   root.appendChild(metaEl);
 
   if (records.length === 0) {
@@ -1925,15 +2206,16 @@ function renderExportDom(meta, periodKey, data) {
   return root;
 }
 
-function exportFilename(profile, periodKey, data, ext) {
+function exportFilename(profile, periodKey, data, ext, templateKey) {
   const { records, fromIso, toIso } = data;
   const subj = profile.id || 'export';
+  const tpl = templateKey && templateKey !== 'free' ? `-${templateKey}` : '';
   const toStr = fmtExportDateShort(toIso);
-  if (periodKey === 'today') return `kid-journal-${subj}-${toStr}.${ext}`;
+  if (periodKey === 'today') return `kid-journal-${subj}${tpl}-${toStr}.${ext}`;
   const fromStr = fromIso
     ? fmtExportDateShort(fromIso)
     : fmtExportDateShort((records[0] && records[0].sortMoment) || toIso);
-  return `kid-journal-${subj}-${fromStr}-to-${toStr}.${ext}`;
+  return `kid-journal-${subj}${tpl}-${fromStr}-to-${toStr}.${ext}`;
 }
 
 async function deliverTxt(filename, text) {
@@ -1970,17 +2252,26 @@ function deliverPdfViaPrint(filename, dom) {
   setTimeout(cleanup, 60000);
 }
 
+const TEMPLATE_LABELS = {
+  free: 'Свободный',
+  gi: 'Для гастроэнтеролога',
+  neuro: 'Для невролога',
+  allergy: 'Для аллерголога',
+};
+
 function openExport() {
   const profile = getActiveProfile();
-  const meta = { profile };
   const node = cloneTpl('tpl-export');
   const periodRow = $('[data-period]', node);
   const formatRow = $('[data-format]', node);
+  const templateRow = $('[data-template]', node);
   const summary = $('[data-summary]', node);
   const runBtn = $('[data-run]', node);
 
   let periodKey = 'today';
   let formatKey = 'txt';
+  let templateKey = 'free';
+  const meta = { profile, get templateKey() { return templateKey; } };
   let currentData = null;
 
   const pickOpt = (row, selectedBtn) => {
@@ -2013,6 +2304,14 @@ function openExport() {
       pickOpt(formatRow, b);
     });
   });
+  if (templateRow) {
+    $$('button', templateRow).forEach(b => {
+      b.addEventListener('click', () => {
+        templateKey = b.dataset.templateKey;
+        pickOpt(templateRow, b);
+      });
+    });
+  }
 
   const close = () => node.remove();
   $('[data-cancel]', node).addEventListener('click', close);
@@ -2022,7 +2321,7 @@ function openExport() {
 
   runBtn.addEventListener('click', async () => {
     if (!currentData || currentData.records.length === 0) return;
-    const filename = exportFilename(profile, periodKey, currentData, formatKey);
+    const filename = exportFilename(profile, periodKey, currentData, formatKey, templateKey);
     if (formatKey === 'txt') {
       await deliverTxt(filename, buildTxt(meta, periodKey, currentData));
     } else {
