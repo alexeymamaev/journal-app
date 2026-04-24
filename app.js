@@ -106,6 +106,34 @@ db.version(2).stores({
   });
 });
 
+// v3 (2026-04-24) — theme-primary. Profile shape:
+//   categories[], mainTileOrder[], mainTileHidden[], age → удаляются.
+//   themes[] (ordered, toggle=include) + themeFieldOverrides{} + description (из age).
+// См. v3-spec.md §4. One-way door — перед upgrade'ом bootstrap запускает
+// runPreMigrationBackupIfNeeded() отдельным Dexie-instance'ом на v2 и дампит
+// всю БД в JSON (см. runPreMigrationBackupIfNeeded ниже).
+db.version(3).stores({
+  config:  '&id',
+  records: '++id, profileId, status, postedAt, sortMoment',
+  events:  '++id, recordId, type, moment',
+}).upgrade(async (trans) => {
+  await trans.table('config').toCollection().modify(cfg => {
+    if (!cfg.profiles) return;
+    cfg.profiles = cfg.profiles.map(p => {
+      if (p.themes) return p; // уже v3
+      const hidden = new Set(p.mainTileHidden || []);
+      const ordered = (p.mainTileOrder || []).filter(k => !hidden.has(k));
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.age || '',
+        themes: ordered,
+        themeFieldOverrides: {},
+      };
+    });
+  });
+});
+
 async function ensureDbOpen() {
   if (db.isOpen()) return;
   await db.open();
@@ -132,6 +160,50 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') ensureDbOpen().catch(() => {});
 });
 window.addEventListener('pageshow', () => { ensureDbOpen().catch(() => {}); });
+
+// Перед v3 upgrade'ом: если БД ещё на v2 и бэкап не делался —
+// открыть временный Dexie-instance ТОЛЬКО с v2-схемой (без v3), снять дамп
+// всей базы в JSON через KJMigrate.exportV2Backup, поставить флаг,
+// закрыть. После этого основной `db` с v3-схемой откроется и запустит upgrade.
+// Если navigator.share отменят — throw, чтобы upgrade НЕ запустился.
+async function runPreMigrationBackupIfNeeded() {
+  if (!window.indexedDB?.databases) return; // старые Safari — best-effort skip
+  let storedIdbVersion = 0;
+  try {
+    const dbs = await indexedDB.databases();
+    const ours = dbs.find(d => d.name === 'kidjournal-v5');
+    storedIdbVersion = ours?.version || 0;
+  } catch { return; }
+
+  // Dexie хранит версию как dexieVersion * 10. v2 = IDB version 20.
+  if (storedIdbVersion !== 20) return; // либо свежая (0), либо уже >=30 (v3+)
+
+  const backupDb = new Dexie('kidjournal-v5');
+  backupDb.version(2).stores({
+    config:  '&id',
+    records: '++id, profileId, status, postedAt, sortMoment',
+    events:  '++id, recordId, type, moment',
+  });
+  await backupDb.open();
+
+  const cfg = await backupDb.config.get(CONFIG_ID);
+  if (cfg?.v2BackupDone) {
+    await backupDb.close();
+    return;
+  }
+
+  showBanner('Сохраняю бэкап v2 перед обновлением схемы…');
+  try {
+    const result = await window.KJMigrate.exportV2Backup(backupDb);
+    const updated = { ...(cfg || { id: CONFIG_ID }), v2BackupDone: true, v2BackupAt: new Date().toISOString(), v2BackupMeta: result };
+    await backupDb.config.put(updated);
+    showBanner(`Бэкап v2 сохранён (${result.counts.records} записей, ${result.counts.events} событий). Продолжаю обновление.`, { variant: 'ok', autoHide: 4000 });
+  } catch (e) {
+    await backupDb.close();
+    throw new Error(`Бэкап v2 не удалось сохранить (${e.message || e}). Обновление схемы НЕ запущено — перезапусти приложение и попробуй ещё раз.`);
+  }
+  await backupDb.close();
+}
 
 // Просим у браузера persistent storage — иначе Safari может выгнать IndexedDB
 // при нехватке места, и все записи Лёвы исчезнут. Best-effort, не блокирует boot.
@@ -216,32 +288,29 @@ function getActiveProfile(cfg) {
   return cfg.profiles.find(p => p.id === cfg.activeProfileId) || cfg.profiles[0] || null;
 }
 
-// Объединение тем из всех включённых категорий профиля, сохраняя порядок mainTileOrder.
+// v3: темы = profile.themes (упорядоченный массив, toggle=include, порядок=drag на главной).
+// Категории больше не state, используются только как пресет в «+ Добавить»/онбординге.
 function getProfileThemeKeys(profile) {
-  if (!profile) return [];
-  const set = new Set();
-  for (const catKey of (profile.categories || [])) {
-    const cat = window.CATEGORY_BY_KEY[catKey];
-    if (!cat) continue;
-    for (const t of cat.activeTypes) set.add(t);
-  }
-  return [...set];
+  return profile?.themes ? profile.themes.slice() : [];
 }
 
-// Порядок плиток на главном = пересечение mainTileOrder с доступными темами минус явно скрытые;
-// новые темы, которые не в order и не в hidden, добавляются в конец.
 function getMainTileOrder(profile) {
-  const available = new Set(getProfileThemeKeys(profile));
-  const hidden = new Set(profile?.mainTileHidden || []);
-  const ordered = (profile?.mainTileOrder || []).filter(k => available.has(k) && !hidden.has(k));
-  for (const k of available) {
-    if (!hidden.has(k) && !ordered.includes(k)) ordered.push(k);
-  }
-  return ordered;
+  return getProfileThemeKeys(profile);
 }
 
 function getMainTiles(profile) {
-  return getMainTileOrder(profile);
+  return getProfileThemeKeys(profile);
+}
+
+// Для onboarding/«+ Добавить»: union тем из выбранных категорий-пресетов.
+function unionThemesFromCategories(categoryKeys) {
+  const set = new Set();
+  for (const key of categoryKeys || []) {
+    const cat = window.CATEGORY_BY_KEY[key];
+    if (!cat) continue;
+    for (const t of (cat.themes || cat.activeTypes || [])) set.add(t);
+  }
+  return [...set];
 }
 
 function eventSummary(ev) {
@@ -295,6 +364,7 @@ const state = {
 
 async function boot(retry = 0) {
   try {
+    await runPreMigrationBackupIfNeeded();
     await ensureDbOpen();
     requestPersistentStorage();
     state.config = await loadConfig();
@@ -331,7 +401,7 @@ function startOnboarding(mode, prefill) {
     step: 0,
     mode: mode || 'first',
     name: prefill?.name || '',
-    age: prefill?.age || '',
+    description: prefill?.description || prefill?.age || '',
     categories: prefill?.categories ? prefill.categories.slice() : [],
     themes: [],
   };
@@ -360,8 +430,8 @@ function renderOnboarding() {
         <input type="text" id="onb-name" placeholder="например, Лёва" value="${escapeHtml(state.onb.name)}">
       </label>
       <label class="field">
-        <span class="lbl">Возраст</span>
-        <input type="text" id="onb-age" placeholder="например, 3 года" value="${escapeHtml(state.onb.age)}">
+        <span class="lbl">Описание</span>
+        <input type="text" id="onb-desc" placeholder="например, 3 года, ЖКТ" value="${escapeHtml(state.onb.description)}">
       </label>
     `;
   } else if (step === 1) {
@@ -444,10 +514,10 @@ function renderOnboarding() {
   next.addEventListener('click', async () => {
     if (step === 0) {
       const name = $('#onb-name').value.trim();
-      const age = $('#onb-age').value.trim();
+      const description = $('#onb-desc').value.trim();
       if (!name) { alert('Имя обязательно'); return; }
       state.onb.name = name;
-      state.onb.age = age;
+      state.onb.description = description;
       state.onb.step = 1;
       renderOnboarding();
     } else if (step === 1) {
@@ -464,36 +534,22 @@ function renderOnboarding() {
   setScreen(node);
 }
 
+// v2-compat: старое имя, делегирует в v3-версию.
 function unionThemeKeysFromCategories(categoryKeys) {
-  const set = new Set();
-  for (const k of categoryKeys) {
-    const c = window.CATEGORY_BY_KEY[k];
-    if (!c) continue;
-    for (const t of c.activeTypes) set.add(t);
-  }
-  return [...set];
-}
-
-function buildMainTileOrder(categories, themes) {
-  // default order: по первому категории в списке, затем остальные темы
-  const primaryCat = window.CATEGORY_BY_KEY[categories[0]];
-  const primary = (primaryCat?.defaultMainTiles || []).filter(k => themes.includes(k));
-  const rest = themes.filter(k => !primary.includes(k));
-  return [...primary, ...rest];
+  return unionThemesFromCategories(categoryKeys);
 }
 
 async function finishOnboarding() {
-  const { name, age, categories, themes, mode } = state.onb;
-  const mainTileOrder = buildMainTileOrder(categories, themes);
+  const { name, description, themes, mode } = state.onb;
 
   if (mode === 'new-profile' && state.config) {
-    // добавить новый профиль в существующий конфиг
     const existingIds = state.config.profiles.map(p => p.id);
     const newProfile = {
       id: genProfileId(name, existingIds),
-      name, age,
-      categories: categories.slice(),
-      mainTileOrder,
+      name,
+      description,
+      themes: themes.slice(),
+      themeFieldOverrides: {},
     };
     const updated = {
       ...state.config,
@@ -507,12 +563,12 @@ async function finishOnboarding() {
     return;
   }
 
-  // первый запуск либо повторный онбординг
   const profile = {
     id: genProfileId(name, []),
-    name, age,
-    categories: categories.slice(),
-    mainTileOrder,
+    name,
+    description,
+    themes: themes.slice(),
+    themeFieldOverrides: {},
   };
   const cfg = {
     profiles: [profile],
@@ -730,13 +786,14 @@ function openProfileSwitcher() {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'ps-row' + (active ? ' active' : '');
-    const sub = p.categories.map(k => window.CATEGORY_BY_KEY[k]?.label).filter(Boolean).join(', ');
-    const ageBit = p.age ? `${p.age} · ` : '';
+    const themesCount = (p.themes || []).length;
+    const descBit = p.description ? `${p.description} · ` : '';
+    const sub = `${descBit}${themesCount} тем`;
     row.innerHTML = `
       <span class="ps-dot ${active ? 'on' : 'off'}" aria-hidden="true"></span>
       <div class="ps-main">
         <span class="ps-name">${escapeHtml(p.name)}</span>
-        <span class="ps-sub">${escapeHtml(ageBit + sub)}</span>
+        <span class="ps-sub">${escapeHtml(sub)}</span>
       </div>
       ${active ? '<span class="ps-check" aria-hidden="true">✓</span>' : ''}
     `;
@@ -790,8 +847,8 @@ async function renderSettings() {
   const active = getActiveProfile();
   for (const p of state.config.profiles) {
     const isActive = p.id === state.config.activeProfileId;
-    const sub = (p.age ? p.age + ' · ' : '')
-      + p.categories.map(k => window.CATEGORY_BY_KEY[k]?.label).filter(Boolean).join(', ');
+    const themesCount = (p.themes || []).length;
+    const sub = (p.description ? p.description + ' · ' : '') + `${themesCount} тем`;
     const row = sgRow({
       dot: isActive ? 'on' : 'off',
       title: p.name,
@@ -808,19 +865,8 @@ async function renderSettings() {
   }));
   root.appendChild(profilesGroup);
 
-  // Главный экран
-  root.appendChild(sgLabel('Главный экран'));
-  const mainGroup = sgGroup();
-  const themeKeys = getProfileThemeKeys(active);
-  const mainCount = getMainTiles(active).length;
-  mainGroup.appendChild(sgRow({
-    title: 'Темы на главном',
-    sub: 'для активного профиля',
-    value: `${mainCount} из ${themeKeys.length}`,
-    chev: true,
-    onTap: () => renderSettingsThemes(active.id),
-  }));
-  root.appendChild(mainGroup);
+  // v3: «Темы на главном» как отдельный экран удалён — управление темами теперь
+  // в Profile detail (flat list + UISwitch), порядок — long-press на главной.
 
   // Данные
   root.appendChild(sgLabel('Данные'));
@@ -937,253 +983,190 @@ async function clearAllData() {
   location.reload();
 }
 
-// --- settings: profile detail ---
+// --- settings: profile detail (v3) ---
+//
+// v3: flat theme list с UISwitch. Галка = добавить/убрать из profile.themes.
+// Тап по телу строки = Field-toggle sheet (TODO). «+ Добавить» — sheet с
+// категориями-пресетами для bulk-add (TODO). Пока чистый on/off toggle.
+
+async function saveProfilePatch(profileId, patch) {
+  const cfg = state.config;
+  const profiles = cfg.profiles.map(p => p.id === profileId ? { ...p, ...patch } : p);
+  await saveConfig({ ...cfg, profiles });
+  state.config = await loadConfig();
+}
 
 function renderSettingsProfile(profileId) {
   state.screen = 'settings-profile';
-  const node = cloneTpl('tpl-settings-profile');
-  const cfg = state.config;
-  const existing = cfg.profiles.find(p => p.id === profileId);
-  if (!existing) { renderSettings(); return; }
-
-  $('[data-title]', node).textContent = existing.name;
-
-  const nameEl = $('[data-name]', node);
-  const ageEl = $('[data-age]', node);
-  nameEl.value = existing.name;
-  ageEl.value = existing.age || '';
-
-  // categories multi-check
-  const catGroup = $('[data-categories]', node);
-  catGroup.innerHTML = '';
-  const selectedCats = new Set(existing.categories);
-  for (const c of window.CATEGORIES) {
-    const on = selectedCats.has(c.key);
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'cat-row' + (on ? '' : ' off');
-    row.innerHTML = `
-      <span class="cat-check ${on ? 'on' : ''}" aria-hidden="true"></span>
-      <span class="cat-icon">${c.icon}</span>
-      <div class="cat-main">
-        <span class="cat-label">${c.label}</span>
-        <span class="cat-sub">${escapeHtml(c.description)}</span>
-      </div>
-    `;
-    row.addEventListener('click', () => {
-      if (selectedCats.has(c.key)) selectedCats.delete(c.key);
-      else selectedCats.add(c.key);
-      const nowOn = selectedCats.has(c.key);
-      row.classList.toggle('off', !nowOn);
-      $('.cat-check', row).classList.toggle('on', nowOn);
-    });
-    catGroup.appendChild(row);
-  }
-
-  // themes-count подпись
-  const themesCountEl = $('[data-themes-count]', node);
-  const themeKeys = getProfileThemeKeys(existing);
-  const mainTiles = getMainTiles(existing);
-  themesCountEl.textContent = `${mainTiles.length} из ${themeKeys.length}`;
-
-  $('[data-themes-open]', node).addEventListener('click', async () => {
-    await saveProfileEdits();
-    renderSettingsThemes(profileId);
-  });
-
-  $('[data-delete]', node).addEventListener('click', async () => {
-    const last = cfg.profiles.length === 1;
-    const msg = last
-      ? 'Удалить единственный профиль? После удаления откроется онбординг заново (записи удалятся).'
-      : `Удалить профиль «${existing.name}»? Все записи этого профиля будут удалены.`;
-    if (!confirm(msg)) return;
-    if (!confirm('Точно удалить? Действие необратимое.')) return;
-    // delete records of this profile
-    const toDelete = await db.records.where('profileId').equals(profileId).toArray();
-    for (const r of toDelete) {
-      await db.events.where('recordId').equals(r.id).delete();
-    }
-    await db.records.where('profileId').equals(profileId).delete();
-    const remaining = cfg.profiles.filter(p => p.id !== profileId);
-    if (remaining.length === 0) {
-      // конфиг пустой — стираем и начинаем заново
-      await db.config.delete(CONFIG_ID);
-      state.config = null;
-      startOnboarding();
-      return;
-    }
-    const newActive = cfg.activeProfileId === profileId ? remaining[0].id : cfg.activeProfileId;
-    const upd = { ...cfg, profiles: remaining, activeProfileId: newActive };
-    await saveConfig(upd);
-    state.config = await loadConfig();
-    renderSettings();
-  });
-
-  async function saveProfileEdits() {
-    const name = nameEl.value.trim() || existing.name;
-    const age = ageEl.value.trim();
-    const categories = [...selectedCats];
-    if (categories.length === 0) {
-      alert('У профиля должна быть хотя бы одна категория.');
-      return false;
-    }
-    // подрезаем mainTileOrder под новые категории; добавляем новые темы в конец
-    const themeKeys = new Set(unionThemeKeysFromCategories(categories));
-    const order = (existing.mainTileOrder || []).filter(k => themeKeys.has(k));
-    for (const k of themeKeys) if (!order.includes(k)) order.push(k);
-    const updated = { ...existing, name, age, categories, mainTileOrder: order };
-    const profiles = cfg.profiles.map(p => p.id === profileId ? updated : p);
-    await saveConfig({ ...cfg, profiles });
-    state.config = await loadConfig();
-    return true;
-  }
-
-  $('[data-back]', node).addEventListener('click', async () => {
-    await saveProfileEdits();
-    renderSettings();
-  });
-
-  setScreen(node);
-}
-
-// --- settings: themes (drag list) ---
-
-function renderSettingsThemes(profileId) {
-  state.screen = 'settings-themes';
-  const node = cloneTpl('tpl-settings-themes');
   const cfg = state.config;
   const profile = cfg.profiles.find(p => p.id === profileId);
   if (!profile) { renderSettings(); return; }
 
-  const available = getProfileThemeKeys(profile);
-  const hiddenList = (profile.mainTileHidden || []).filter(k => available.includes(k));
-  const hiddenSet = new Set(hiddenList);
-  const order = (profile.mainTileOrder || []).filter(k => available.includes(k) && !hiddenSet.has(k));
-  for (const k of available) {
-    if (!hiddenSet.has(k) && !order.includes(k)) order.push(k);
-  }
+  const node = document.createElement('section');
+  node.className = 'settings';
 
-  const listEl = $('[data-list]', node);
+  // Header
+  const head = document.createElement('header');
+  head.className = 'sub-head';
+  head.innerHTML = `<button class="btn-back" data-back>←</button><h1>${escapeHtml(profile.name)}</h1>`;
+  node.appendChild(head);
 
-  const saveState = async () => {
-    const updated = {
-      ...profile,
-      mainTileOrder: order.slice(),
-      mainTileHidden: hiddenList.slice(),
-    };
-    const profiles = cfg.profiles.map(p => p.id === profileId ? updated : p);
-    await saveConfig({ ...cfg, profiles });
-    state.config = await loadConfig();
-  };
+  // Name + Description card
+  const metaLbl = sgLabel('О профиле');
+  node.appendChild(metaLbl);
+  const metaGroup = sgGroup();
+  metaGroup.innerHTML = `
+    <div class="sg-input-row"><span class="lbl">Имя</span><input type="text" data-name value="${escapeHtml(profile.name)}"></div>
+    <div class="sg-input-row"><span class="lbl">Описание</span><input type="text" data-desc value="${escapeHtml(profile.description || '')}" placeholder="3 года, ЖКТ"></div>
+  `;
+  node.appendChild(metaGroup);
 
-  function themeRow(key, { isHidden }) {
-    const t = window.TYPE_BY_KEY[key];
-    if (!t) return null;
-    const row = document.createElement('div');
-    row.className = 'theme-row' + (isHidden ? ' hidden-theme' : '');
-    row.dataset.key = key;
-    row.innerHTML = `
-      <span class="theme-icon">${t.icon}</span>
-      <div class="theme-row-main">
-        <span class="theme-row-label">${t.label}</span>
-        <span class="theme-row-sub">${escapeHtml(t.description || '')}</span>
-      </div>
-    `;
-    return row;
-  }
+  // Themes section
+  const themesHeader = document.createElement('div');
+  themesHeader.className = 'sg-label sg-label-row';
+  const themes = (profile.themes || []).slice();
+  themesHeader.innerHTML = `<span>ТЕМЫ · ${themes.length}</span><button type="button" class="link" data-add-themes>+ Добавить</button>`;
+  node.appendChild(themesHeader);
 
-  function render() {
-    listEl.innerHTML = '';
-
-    const visibleHdr = document.createElement('div');
-    visibleHdr.className = 'sg-label';
-    visibleHdr.textContent = `На главном · ${order.length}`;
-    listEl.appendChild(visibleHdr);
-
-    order.forEach((key, idx) => {
-      const row = themeRow(key, { isHidden: false });
-      if (!row) return;
-      const ctrl = document.createElement('div');
-      ctrl.className = 'theme-ctrl';
-
-      const up = document.createElement('button');
-      up.type = 'button';
-      up.className = 'theme-btn';
-      up.textContent = '↑';
-      up.disabled = idx === 0;
-      up.addEventListener('click', async () => {
-        if (idx === 0) return;
-        [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
-        await saveState();
-        render();
-      });
-
-      const down = document.createElement('button');
-      down.type = 'button';
-      down.className = 'theme-btn';
-      down.textContent = '↓';
-      down.disabled = idx === order.length - 1;
-      down.addEventListener('click', async () => {
-        if (idx === order.length - 1) return;
-        [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
-        await saveState();
-        render();
-      });
-
-      const hide = document.createElement('button');
-      hide.type = 'button';
-      hide.className = 'theme-btn theme-btn-text';
-      hide.textContent = 'Скрыть';
-      hide.addEventListener('click', async () => {
-        if (order.length === 1) {
-          alert('Нужна хотя бы одна тема на главном.');
-          return;
-        }
-        order.splice(idx, 1);
-        hiddenList.push(key);
-        hiddenSet.add(key);
-        await saveState();
-        render();
-      });
-
-      ctrl.appendChild(up);
-      ctrl.appendChild(down);
-      ctrl.appendChild(hide);
-      row.appendChild(ctrl);
-      listEl.appendChild(row);
-    });
-
-    if (hiddenList.length > 0) {
-      const hiddenHdr = document.createElement('div');
-      hiddenHdr.className = 'sg-label';
-      hiddenHdr.textContent = `Скрытые · ${hiddenList.length}`;
-      listEl.appendChild(hiddenHdr);
-
-      hiddenList.slice().forEach((key) => {
-        const row = themeRow(key, { isHidden: true });
-        if (!row) return;
-        const show = document.createElement('button');
-        show.type = 'button';
-        show.className = 'theme-btn theme-btn-text';
-        show.textContent = 'На главный';
-        show.addEventListener('click', async () => {
-          const i = hiddenList.indexOf(key);
-          if (i >= 0) hiddenList.splice(i, 1);
-          hiddenSet.delete(key);
-          order.push(key);
-          await saveState();
-          render();
-        });
-        row.appendChild(show);
-        listEl.appendChild(row);
-      });
+  const themesGroup = sgGroup();
+  themesGroup.className = 'sg-group themes-group';
+  if (themes.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'sg-row static';
+    empty.innerHTML = `<div class="sg-row-main"><span class="sg-row-sub">Пока нет тем. Добавь набор через «+ Добавить».</span></div>`;
+    themesGroup.appendChild(empty);
+  } else {
+    for (const key of themes) {
+      const t = window.TYPE_BY_KEY[key];
+      if (!t) continue;
+      const row = document.createElement('div');
+      row.className = 'theme-row-v3';
+      row.innerHTML = `
+        <button type="button" class="theme-row-body" data-key="${escapeHtml(key)}">
+          <span class="theme-row-icon">${t.icon}</span>
+          <span class="theme-row-label">${escapeHtml(t.label)}</span>
+        </button>
+        <button type="button" class="uiswitch on" data-toggle="${escapeHtml(key)}" aria-label="Переключить тему ${escapeHtml(t.label)}">
+          <span class="uiswitch-knob"></span>
+        </button>
+      `;
+      themesGroup.appendChild(row);
+    }
+    // Off-themes (those defined in types.js but not in profile) — показываем в той же группе, off-state.
+    const allKeys = new Set(window.TYPES.map(t => t.key));
+    const onSet = new Set(themes);
+    for (const t of window.TYPES) {
+      if (onSet.has(t.key)) continue;
+      const row = document.createElement('div');
+      row.className = 'theme-row-v3 off';
+      row.innerHTML = `
+        <button type="button" class="theme-row-body" data-key="${escapeHtml(t.key)}">
+          <span class="theme-row-icon">${t.icon}</span>
+          <span class="theme-row-label">${escapeHtml(t.label)}</span>
+        </button>
+        <button type="button" class="uiswitch off" data-toggle="${escapeHtml(t.key)}" aria-label="Переключить тему ${escapeHtml(t.label)}">
+          <span class="uiswitch-knob"></span>
+        </button>
+      `;
+      themesGroup.appendChild(row);
     }
   }
-  render();
+  node.appendChild(themesGroup);
 
-  $('[data-back]', node).addEventListener('click', () => renderSettings());
+  // Delete profile
+  node.appendChild(sgLabel(' '));
+  const dangerGroup = sgGroup();
+  dangerGroup.appendChild(sgRow({
+    title: 'Удалить профиль',
+    sub: 'записи этого профиля тоже удалятся',
+    danger: true,
+    onTap: async () => {
+      const last = cfg.profiles.length === 1;
+      const msg = last
+        ? 'Удалить единственный профиль? После удаления откроется онбординг (записи удалятся).'
+        : `Удалить профиль «${profile.name}»? Все записи этого профиля будут удалены.`;
+      if (!confirm(msg)) return;
+      if (!confirm('Точно удалить? Действие необратимое.')) return;
+      const toDelete = await db.records.where('profileId').equals(profileId).toArray();
+      for (const r of toDelete) {
+        await db.events.where('recordId').equals(r.id).delete();
+      }
+      await db.records.where('profileId').equals(profileId).delete();
+      const remaining = cfg.profiles.filter(p => p.id !== profileId);
+      if (remaining.length === 0) {
+        await db.config.delete(CONFIG_ID);
+        state.config = null;
+        startOnboarding();
+        return;
+      }
+      const newActive = cfg.activeProfileId === profileId ? remaining[0].id : cfg.activeProfileId;
+      await saveConfig({ ...cfg, profiles: remaining, activeProfileId: newActive });
+      state.config = await loadConfig();
+      renderSettings();
+    },
+  }));
+  node.appendChild(dangerGroup);
+
+  // --- wiring ---
+  const nameEl = $('[data-name]', node);
+  const descEl = $('[data-desc]', node);
+
+  async function saveMeta() {
+    const name = nameEl.value.trim() || profile.name;
+    const description = descEl.value.trim();
+    await saveProfilePatch(profileId, { name, description });
+  }
+
+  // Toggle switches
+  node.addEventListener('click', async (e) => {
+    const toggleBtn = e.target.closest('[data-toggle]');
+    if (toggleBtn) {
+      const key = toggleBtn.dataset.toggle;
+      const cur = state.config.profiles.find(p => p.id === profileId);
+      const curThemes = cur?.themes || [];
+      const isOn = curThemes.includes(key);
+      const next = isOn ? curThemes.filter(k => k !== key) : [...curThemes, key];
+      await saveProfilePatch(profileId, { themes: next });
+      renderSettingsProfile(profileId); // re-render
+      return;
+    }
+    const bodyBtn = e.target.closest('[data-key]');
+    if (bodyBtn) {
+      const key = bodyBtn.dataset.key;
+      await saveMeta();
+      openFieldToggleSheet(profileId, key);
+      return;
+    }
+  });
+
+  // + Add
+  $('[data-add-themes]', node)?.addEventListener('click', async () => {
+    await saveMeta();
+    openAddThemesSheet(profileId);
+  });
+
+  $('[data-back]', node).addEventListener('click', async () => {
+    await saveMeta();
+    renderSettings();
+  });
+
   setScreen(node);
 }
+
+// Stubs for v3 sheets — to be implemented in follow-up tasks.
+function openFieldToggleSheet(profileId, themeKey) {
+  const t = window.TYPE_BY_KEY[themeKey];
+  if (!t) return;
+  alert(`Поля · ${t.label}\n\nЭкран настройки полей темы — в разработке.\n\nПока поля включены все по умолчанию.`);
+}
+
+function openAddThemesSheet(profileId) {
+  alert('«+ Добавить» sheet — в разработке.\n\nПока включай/выключай темы свитчами в списке ниже: все 7 встроенных тем показаны (on = в профиле, off = не в профиле).');
+}
+
+// v3: экран «Темы на главном» (renderSettingsThemes) удалён.
+// Управление темами → Profile detail (flat list + UISwitch).
+// Порядок тем → long-press + drag на главной (пакет B).
 
 // ---------- bottom sheet (theme / type) ----------
 
@@ -1783,10 +1766,18 @@ function eventFieldLines(ev) {
 }
 
 function profileCategoriesLabel(profile) {
-  return (profile.categories || [])
-    .map(k => window.CATEGORY_BY_KEY[k]?.label)
-    .filter(Boolean)
-    .join(', ');
+  // v3: категории не хранятся в профиле. В экспорт кладём описание профиля
+  // (свободный текст пользователя — например «3 года, ЖКТ»). Функция сохранена
+  // для совместимости сигнатуры, возвращает description.
+  return profile?.description || '';
+}
+
+function profileSummaryLine(profile) {
+  // Строка для шапки экспорта: «Лёва · 3 года, ЖКТ · 7 тем».
+  const parts = [profile.name];
+  if (profile.description) parts.push(profile.description);
+  if (Array.isArray(profile.themes)) parts.push(`${profile.themes.length} тем`);
+  return parts.join(' · ');
 }
 
 function buildTxt(meta, periodKey, data) {
@@ -1801,8 +1792,7 @@ function buildTxt(meta, periodKey, data) {
   const totalEvents = Array.from(eventsByRec.values()).reduce((s, a) => s + a.length, 0);
   const lines = [];
   lines.push(`Журнал · ${profile.name}`);
-  const catLbl = profileCategoriesLabel(profile);
-  lines.push(`Профиль: ${profile.name}${profile.age ? ' · ' + profile.age : ''}${catLbl ? ' · категории: ' + catLbl : ''}`);
+  lines.push(`Профиль: ${profileSummaryLine(profile)}`);
   const effFrom = fromIso || (records[0] && records[0].sortMoment) || toIso;
   lines.push(`Период: ${periodLabel} (${fmtExportDateShort(effFrom)} – ${fmtExportDateShort(toIso)})`);
   lines.push(`Записей: ${records.length} · событий: ${totalEvents}`);
@@ -1872,9 +1862,8 @@ function renderExportDom(meta, periodKey, data) {
   const metaEl = document.createElement('div');
   metaEl.className = 'export-meta';
   const effFrom = fromIso || (records[0] && records[0].sortMoment) || toIso;
-  const catLbl = profileCategoriesLabel(profile);
   metaEl.innerHTML = [
-    `Профиль: ${escapeHtml(profile.name)}${profile.age ? ' · ' + escapeHtml(profile.age) : ''}${catLbl ? ' · категории: ' + escapeHtml(catLbl) : ''}`,
+    `Профиль: ${escapeHtml(profileSummaryLine(profile))}`,
     `Период: ${periodLabel} (${fmtExportDateShort(effFrom)} – ${fmtExportDateShort(toIso)})`,
     `Записей: ${records.length} · событий: ${totalEvents}`,
     `Экспорт: ${fmtExportNow()}`,
