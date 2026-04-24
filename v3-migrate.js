@@ -16,7 +16,7 @@
 // a File works and opens the share sheet.
 
 (function (global) {
-  async function exportV2Backup(db) {
+  async function exportDbAsJson(db, schemaVersion) {
     const [config, records, events] = await Promise.all([
       db.config.toArray(),
       db.records.toArray(),
@@ -25,7 +25,7 @@
 
     const backup = {
       exportedAt: new Date().toISOString(),
-      schemaVersion: 2,
+      schemaVersion,
       source: 'kid-journal-app',
       counts: {
         config: config.length,
@@ -37,14 +37,14 @@
 
     const json = JSON.stringify(backup, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
-    const filename = `journal-backup-v2-${yyyymmdd()}.json`;
+    const filename = `journal-backup-v${schemaVersion}-${yyyymmdd()}.json`;
     const file = new File([blob], filename, { type: 'application/json' });
 
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({
         files: [file],
-        title: 'Бэкап Kid Journal v2',
-        text: `Записей: ${records.length}, событий: ${events.length}. Сохрани в Files/iCloud — пригодится если миграция v3 что-то повредит.`,
+        title: `Бэкап Kid Journal v${schemaVersion}`,
+        text: `Записей: ${records.length}, событий: ${events.length}. Сохрани в Files/iCloud.`,
       });
       return { method: 'share', filename, counts: backup.counts };
     }
@@ -60,11 +60,21 @@
     return { method: 'download', filename, counts: backup.counts };
   }
 
+  async function exportV2Backup(db) {
+    return exportDbAsJson(db, 2);
+  }
+
+  async function exportCurrentBackup(db) {
+    // Current schema is v3 (post-migration). If этот код вызвали до миграции,
+    // хелпер на уровне боота runPreMigrationBackupIfNeeded уже дёрнул exportV2Backup.
+    return exportDbAsJson(db, 3);
+  }
+
   function yyyymmdd() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
 
-  global.KJMigrate = { exportV2Backup };
+  global.KJMigrate = { exportV2Backup, exportCurrentBackup, exportDbAsJson };
 })(window);

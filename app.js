@@ -988,6 +988,23 @@ async function renderSettings() {
     const valueEl = storageRow.querySelector('.sg-row-value');
     if (valueEl) valueEl.textContent = status;
   })();
+  aboutGroup.appendChild(sgRow({
+    title: 'Сохранить бэкап',
+    sub: 'JSON-дамп всех записей через share-sheet',
+    chev: true,
+    onTap: async () => {
+      try {
+        const res = await window.KJMigrate.exportCurrentBackup(db);
+        showBanner(
+          `Бэкап сохранён: ${res.filename} (${res.counts.records} записей, ${res.counts.events} событий).`,
+          { variant: 'ok', autoHide: 5000 }
+        );
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // пользователь отменил share
+        showError(e);
+      }
+    },
+  }));
   root.appendChild(aboutGroup);
 
   $('[data-back]', node).addEventListener('click', () => renderMain());
