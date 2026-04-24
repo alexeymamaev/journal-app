@@ -134,6 +134,16 @@ db.version(3).stores({
   });
 });
 
+// v4 (2026-04-25) — Custom Types (фаза 2.5). Новая таблица userTypes с
+// profileId-индексом. records/events/config без изменений. Темы per-profile.
+// См. custom-types-spec.md §3.
+db.version(4).stores({
+  config:    '&id',
+  records:   '++id, profileId, status, postedAt, sortMoment',
+  events:    '++id, recordId, type, moment',
+  userTypes: '&key, profileId, createdAt',
+}); // upgrade пуст — таблица новая, существующие данные не трогаем
+
 async function ensureDbOpen() {
   if (db.isOpen()) return;
   await db.open();
@@ -288,6 +298,148 @@ function getActiveProfile(cfg) {
   return cfg.profiles.find(p => p.id === cfg.activeProfileId) || cfg.profiles[0] || null;
 }
 
+// ---------- custom types (phase 2.5) ----------
+
+// Per-profile user types — держим в памяти только активного профиля.
+// Перезагружаем на boot и при смене активного профиля.
+// См. custom-types-spec.md §4.1.
+window.USER_TYPES = [];
+
+function rebuildTypeByKey() {
+  const idx = {};
+  for (const t of window.TYPES) idx[t.key] = Object.assign({}, t, { source: 'builtin' });
+  for (const t of window.USER_TYPES) {
+    if (idx[t.key]) console.warn('[custom-types] key collision:', t.key);
+    idx[t.key] = Object.assign({}, t, { source: 'user' });
+  }
+  window.TYPE_BY_KEY = idx;
+}
+
+async function loadUserTypesForActiveProfile() {
+  const profile = getActiveProfile();
+  if (!profile) {
+    window.USER_TYPES = [];
+  } else {
+    window.USER_TYPES = await db.userTypes
+      .where('profileId').equals(profile.id)
+      .sortBy('createdAt');
+  }
+  rebuildTypeByKey();
+}
+
+// Возвращает все доступные темы для активного профиля — builtin + user.
+// Используется везде, где раньше был `window.TYPES`.
+function allTypes() {
+  return [...window.TYPES, ...window.USER_TYPES];
+}
+
+// Генерация id'ов: 8-char base36. Префиксы u_/f_/o_ — для отладки.
+function randId(prefix) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let s = '';
+  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return prefix + s;
+}
+function newTypeKey()  { return randId('u_'); }
+function newFieldKey() { return randId('f_'); }
+function newOptionKey(){ return randId('o_'); }
+
+// Валидация типа. Возвращает массив ошибок (строки) или [] если всё ок.
+function validateType(type) {
+  const errs = [];
+  const label = (type.label || '').trim();
+  const icon = (type.icon || '').trim();
+  if (!label) errs.push('Название темы не заполнено');
+  if (!icon) errs.push('Иконка не выбрана');
+  const fieldLabels = new Set();
+  for (const f of (type.fields || [])) {
+    const fl = (f.label || '').trim();
+    if (!fl) { errs.push('Поле без названия'); continue; }
+    if (fieldLabels.has(fl.toLowerCase())) errs.push(`Поле «${fl}» — дубль`);
+    fieldLabels.add(fl.toLowerCase());
+    if (f.kind === 'single' || f.kind === 'multi') {
+      const opts = f.options || [];
+      if (opts.length < 2) errs.push(`Поле «${fl}» — нужно ≥2 значений`);
+      const optLabels = new Set();
+      for (const o of opts) {
+        const ol = (o.label || '').trim();
+        if (!ol) { errs.push(`Поле «${fl}» — пустое значение`); continue; }
+        if (optLabels.has(ol.toLowerCase())) errs.push(`Поле «${fl}» — дубль «${ol}»`);
+        optLabels.add(ol.toLowerCase());
+      }
+    }
+  }
+  return errs;
+}
+
+// Сохранение нового или изменённого user type. Возвращает сохранённый type.
+async function saveUserType(type, isNew) {
+  const profile = getActiveProfile();
+  if (!profile) throw new Error('Нет активного профиля');
+  const record = {
+    key: type.key,
+    profileId: profile.id,
+    label: type.label.trim(),
+    icon: type.icon.trim(),
+    description: (type.description || '').trim() || undefined,
+    fields: (type.fields || []).map(f => ({
+      key: f.key,
+      label: f.label.trim(),
+      kind: f.kind,
+      required: !!f.required,
+      ...(f.kind === 'text' && f.placeholder ? { placeholder: f.placeholder.trim() } : {}),
+      ...((f.kind === 'single' || f.kind === 'multi') ? {
+        options: (f.options || []).map(o => ({ key: o.key, label: o.label.trim() })),
+      } : {}),
+    })),
+    createdAt: isNew ? Date.now() : (type.createdAt || Date.now()),
+  };
+  await db.userTypes.put(record);
+  if (isNew) {
+    // Автоматически включаем в активный профиль.
+    const cur = state.config.profiles.find(p => p.id === profile.id);
+    const themes = [...(cur.themes || []), record.key];
+    await saveProfilePatch(profile.id, { themes });
+  } else {
+    // Очистим overrides от удалённых полей: для текущего профиля выдрать
+    // лишние ключи из themeFieldOverrides[type.key].
+    const cur = state.config.profiles.find(p => p.id === profile.id);
+    const ov = (cur.themeFieldOverrides || {})[record.key];
+    if (ov) {
+      const validFieldKeys = new Set(record.fields.map(f => f.key));
+      const cleaned = {};
+      for (const [k, v] of Object.entries(ov)) {
+        if (validFieldKeys.has(k)) cleaned[k] = v;
+      }
+      const overrides = { ...(cur.themeFieldOverrides || {}) };
+      if (Object.keys(cleaned).length) overrides[record.key] = cleaned;
+      else delete overrides[record.key];
+      await saveProfilePatch(profile.id, { themeFieldOverrides: overrides });
+    }
+  }
+  await loadUserTypesForActiveProfile();
+  return record;
+}
+
+// Удаление user type — из userTypes + из themes + themeFieldOverrides активного профиля.
+// Старые events остаются (labelSnapshot хранит имя темы — история рендерит readonly).
+async function deleteUserType(key) {
+  const profile = getActiveProfile();
+  if (!profile) return;
+  await db.userTypes.delete(key);
+  const cur = state.config.profiles.find(p => p.id === profile.id);
+  const themes = (cur.themes || []).filter(k => k !== key);
+  const overrides = { ...(cur.themeFieldOverrides || {}) };
+  delete overrides[key];
+  await saveProfilePatch(profile.id, { themes, themeFieldOverrides: overrides });
+  await loadUserTypesForActiveProfile();
+}
+
+// Сколько events висит на теме — для confirm-диалога удаления.
+async function countEventsForType(key) {
+  return db.events.where('type').equals(key).count();
+}
+
 // v3: темы = profile.themes (упорядоченный массив, toggle=include, порядок=drag на главной).
 // Категории больше не state, используются только как пресет в «+ Добавить»/онбординге.
 function getProfileThemeKeys(profile) {
@@ -368,6 +520,7 @@ async function boot(retry = 0) {
     await ensureDbOpen();
     requestPersistentStorage();
     state.config = await loadConfig();
+    await loadUserTypesForActiveProfile();
     if (!state.config) {
       startOnboarding();
     } else {
@@ -574,6 +727,7 @@ async function finishOnboarding() {
     };
     await saveConfig(updated);
     state.config = await loadConfig();
+    await loadUserTypesForActiveProfile();
     state.onb = null;
     await renderMain();
     return;
@@ -592,6 +746,7 @@ async function finishOnboarding() {
   };
   await saveConfig(cfg);
   state.config = await loadConfig();
+  await loadUserTypesForActiveProfile();
   state.onb = null;
   await renderMain();
 }
@@ -878,6 +1033,7 @@ function openProfileSwitcher() {
         const upd = { ...cfg, activeProfileId: p.id };
         await saveConfig(upd);
         state.config = await loadConfig();
+        await loadUserTypesForActiveProfile();
       }
       close();
       if (!active) await renderMain();
@@ -1145,10 +1301,10 @@ function renderSettingsProfile(profileId) {
       `;
       themesGroup.appendChild(row);
     }
-    // Off-themes (those defined in types.js but not in profile) — показываем в той же группе, off-state.
-    const allKeys = new Set(window.TYPES.map(t => t.key));
+    // Off-themes (defined но не в profile) — показываем в той же группе, off-state.
+    // Включаем и builtin, и user types активного профиля (allTypes()).
     const onSet = new Set(themes);
-    for (const t of window.TYPES) {
+    for (const t of allTypes()) {
       if (onSet.has(t.key)) continue;
       const row = document.createElement('div');
       row.className = 'theme-row-v3 off';
@@ -1185,16 +1341,20 @@ function renderSettingsProfile(profileId) {
         await db.events.where('recordId').equals(r.id).delete();
       }
       await db.records.where('profileId').equals(profileId).delete();
+      await db.userTypes.where('profileId').equals(profileId).delete(); // custom types cascade
       const remaining = cfg.profiles.filter(p => p.id !== profileId);
       if (remaining.length === 0) {
         await db.config.delete(CONFIG_ID);
         state.config = null;
+        window.USER_TYPES = [];
+        rebuildTypeByKey();
         startOnboarding();
         return;
       }
       const newActive = cfg.activeProfileId === profileId ? remaining[0].id : cfg.activeProfileId;
       await saveConfig({ ...cfg, profiles: remaining, activeProfileId: newActive });
       state.config = await loadConfig();
+      await loadUserTypesForActiveProfile();
       renderSettings();
     },
   }));
@@ -1376,6 +1536,10 @@ function openAddThemesSheet(profileId) {
       <div class="v3-cats-card"></div>
       <div class="v3-sheet-section-lbl">ВСЕ ТЕМЫ</div>
       <div class="v3-themes-card"></div>
+      <div class="v3-sheet-section-lbl" data-own-lbl>СВОИ ТЕМЫ · 0</div>
+      <div class="v3-own-card" data-own-card></div>
+      <button type="button" class="v3-create-own-btn" data-create-own>+ Создать свою тему</button>
+      <p class="v3-sheet-hint">Свои темы видны только в этом профиле.</p>
     `;
 
     const catsCard = sheet.querySelector('.v3-cats-card');
@@ -1411,6 +1575,30 @@ function openAddThemesSheet(profileId) {
       `;
       themesCard.appendChild(row);
     }
+
+    // СВОИ ТЕМЫ — user types активного профиля.
+    const ownLbl = sheet.querySelector('[data-own-lbl]');
+    const ownCard = sheet.querySelector('[data-own-card]');
+    ownLbl.textContent = `СВОИ ТЕМЫ · ${window.USER_TYPES.length}`;
+    if (window.USER_TYPES.length === 0) {
+      ownCard.style.display = 'none';
+    } else {
+      ownCard.style.display = '';
+      for (const t of window.USER_TYPES) {
+        const isOn = activeSet.has(t.key);
+        const row = document.createElement('div');
+        row.className = 'v3-theme-toggle-row v3-own-row';
+        row.innerHTML = `
+          <span class="v3-theme-icon">${t.icon}</span>
+          <span class="v3-theme-label">${escapeHtml(t.label)}</span>
+          <button type="button" class="link v3-own-edit" data-edit-own="${escapeHtml(t.key)}">Редактировать</button>
+          <button type="button" class="uiswitch ${isOn ? 'on' : 'off'}" data-theme="${escapeHtml(t.key)}">
+            <span class="uiswitch-knob"></span>
+          </button>
+        `;
+        ownCard.appendChild(row);
+      }
+    }
   }
 
   sheet.addEventListener('click', async (e) => {
@@ -1440,6 +1628,22 @@ function openAddThemesSheet(profileId) {
       render();
       return;
     }
+    if (e.target.closest('[data-create-own]')) {
+      // Сохраним текущий прогресс сheet-а, потом уйдём в конструктор.
+      await saveProfilePatch(profileId, { themes: tempThemes });
+      close();
+      openTypeConstructor(null, profileId);
+      return;
+    }
+    const editBtn = e.target.closest('[data-edit-own]');
+    if (editBtn) {
+      await saveProfilePatch(profileId, { themes: tempThemes });
+      close();
+      const key = editBtn.dataset.editOwn;
+      const type = window.USER_TYPES.find(t => t.key === key);
+      if (type) openTypeConstructor(type, profileId);
+      return;
+    }
   });
 
   backdrop.addEventListener('click', (e) => {
@@ -1454,11 +1658,431 @@ function openAddThemesSheet(profileId) {
 // Управление темами → Profile detail (flat list + UISwitch).
 // Порядок тем → long-press + drag на главной (пакет B).
 
+// ---------- custom types: конструктор темы + конструктор поля ----------
+
+// Полноэкранный sheet для создания/редактирования user type.
+// existing=null — create mode; existing=UserType — edit mode.
+// profileId — возвращаемся в его «+ Добавить» после сохранения/отмены.
+function openTypeConstructor(existing, profileId) {
+  const isNew = !existing;
+  // In-memory draft. Коммитится целиком по «Сохранить».
+  const draft = existing ? JSON.parse(JSON.stringify(existing)) : {
+    key: newTypeKey(),
+    label: '',
+    icon: '',
+    description: '',
+    fields: [],
+    createdAt: Date.now(),
+  };
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'v3-fullscreen';
+
+  const close = () => {
+    backdrop.remove();
+    // Вернуть «+ Добавить» с актуальным состоянием.
+    openAddThemesSheet(profileId);
+  };
+
+  function render() {
+    backdrop.innerHTML = `
+      <div class="tc-head">
+        <button type="button" class="tc-back" data-back aria-label="Назад">←</button>
+        <div class="tc-head-title">${isNew ? 'Новая тема' : escapeHtml(draft.label || 'Тема')}</div>
+        <button type="button" class="tc-save ${isSaveReady(draft) ? 'active' : ''}" data-save>Сохранить</button>
+      </div>
+      <div class="tc-body">
+        <div class="tc-meta-card">
+          <div class="tc-meta-row">
+            <span class="tc-meta-lbl">Иконка</span>
+            <input class="tc-meta-icon" type="text" data-icon maxlength="2" placeholder="🎯" value="${escapeHtml(draft.icon || '')}">
+          </div>
+          <div class="tc-meta-row">
+            <span class="tc-meta-lbl">Название</span>
+            <input class="tc-meta-input" type="text" data-label maxlength="40" placeholder="например, Завтрак" value="${escapeHtml(draft.label || '')}">
+          </div>
+          <div class="tc-meta-row">
+            <span class="tc-meta-lbl">Описание</span>
+            <input class="tc-meta-input" type="text" data-desc maxlength="80" placeholder="не обязательно" value="${escapeHtml(draft.description || '')}">
+          </div>
+        </div>
+
+        <div class="tc-fields-head">
+          <span class="tc-fields-lbl">ПОЛЯ · ${draft.fields.length}</span>
+          <button type="button" class="link" data-add-field>+ Поле</button>
+        </div>
+
+        <div class="tc-fields-list"></div>
+
+        ${!isNew ? `
+          <div class="tc-spacer"></div>
+          <button type="button" class="tc-delete-btn" data-delete>Удалить тему</button>
+        ` : ''}
+      </div>
+    `;
+
+    const list = backdrop.querySelector('.tc-fields-list');
+    if (draft.fields.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tc-fields-empty';
+      empty.innerHTML = `
+        <div class="tc-fields-empty-title">Поля пока не добавлены</div>
+        <div class="tc-fields-empty-sub">Тап «+ Поле» чтобы настроить что будешь фиксировать</div>
+      `;
+      list.appendChild(empty);
+    } else {
+      draft.fields.forEach((f, i) => {
+        const row = document.createElement('div');
+        row.className = 'tc-field-row';
+        row.innerHTML = `
+          <div class="tc-field-info">
+            <span class="tc-field-title">${escapeHtml(f.label || '(без названия)')}</span>
+            <span class="tc-field-sub">${escapeHtml(fieldSummary(f))}</span>
+          </div>
+          <div class="tc-field-actions">
+            <button type="button" class="tc-field-btn" data-move="${i}:-1" aria-label="Вверх" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button type="button" class="tc-field-btn" data-move="${i}:1" aria-label="Вниз" ${i === draft.fields.length - 1 ? 'disabled' : ''}>↓</button>
+            <button type="button" class="tc-field-btn" data-edit-field="${i}" aria-label="Редактировать">✎</button>
+          </div>
+        `;
+        list.appendChild(row);
+      });
+    }
+  }
+
+  function readMetaFromInputs() {
+    draft.label = backdrop.querySelector('[data-label]')?.value || '';
+    draft.icon = backdrop.querySelector('[data-icon]')?.value || '';
+    draft.description = backdrop.querySelector('[data-desc]')?.value || '';
+  }
+
+  backdrop.addEventListener('input', () => {
+    readMetaFromInputs();
+    // Обновим active-state кнопки Сохранить.
+    const saveBtn = backdrop.querySelector('[data-save]');
+    if (saveBtn) saveBtn.classList.toggle('active', isSaveReady(draft));
+    // Обновим заголовок в edit-mode.
+    if (!isNew) {
+      const title = backdrop.querySelector('.tc-head-title');
+      if (title) title.textContent = draft.label || 'Тема';
+    }
+  });
+
+  backdrop.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-back]')) {
+      readMetaFromInputs();
+      if (hasChanges(existing, draft)) {
+        if (!confirm(isNew ? 'Отменить создание темы?' : 'Отменить изменения?')) return;
+      }
+      close();
+      return;
+    }
+    if (e.target.closest('[data-save]')) {
+      readMetaFromInputs();
+      const errs = validateType(draft);
+      if (errs.length) { alert(errs.join('\n')); return; }
+      try {
+        await saveUserType(draft, isNew);
+        close();
+      } catch (err) { showError(err); }
+      return;
+    }
+    if (e.target.closest('[data-add-field]')) {
+      readMetaFromInputs();
+      openFieldEditor(null, (newField) => {
+        draft.fields.push(newField);
+        render();
+      });
+      return;
+    }
+    const moveBtn = e.target.closest('[data-move]');
+    if (moveBtn) {
+      readMetaFromInputs();
+      const [iStr, dirStr] = moveBtn.dataset.move.split(':');
+      const i = +iStr;
+      const dir = +dirStr;
+      const j = i + dir;
+      if (j < 0 || j >= draft.fields.length) return;
+      const tmp = draft.fields[i]; draft.fields[i] = draft.fields[j]; draft.fields[j] = tmp;
+      render();
+      return;
+    }
+    const editBtn = e.target.closest('[data-edit-field]');
+    if (editBtn) {
+      readMetaFromInputs();
+      const i = +editBtn.dataset.editField;
+      openFieldEditor(draft.fields[i], (updated, del) => {
+        if (del) draft.fields.splice(i, 1);
+        else draft.fields[i] = updated;
+        render();
+      });
+      return;
+    }
+    if (e.target.closest('[data-delete]')) {
+      if (isNew) return;
+      const n = await countEventsForType(draft.key);
+      const msg = n > 0
+        ? `Удалить тему «${draft.label}»?\n\nНа этой теме ${n} ${pluralRecords(n)}. Они останутся в истории с лейблом «${draft.label}», но редактировать их будет нельзя.`
+        : `Удалить тему «${draft.label}»?\n\nЗаписей на этой теме нет.`;
+      if (!confirm(msg)) return;
+      try {
+        await deleteUserType(draft.key);
+        close();
+      } catch (err) { showError(err); }
+    }
+  });
+
+  render();
+  document.body.appendChild(backdrop);
+}
+
+function isSaveReady(draft) {
+  return !!(draft.label && draft.label.trim() && draft.icon && draft.icon.trim());
+}
+
+function hasChanges(original, draft) {
+  if (!original) {
+    // In create mode: any input considered change.
+    return !!(draft.label || draft.icon || draft.description || draft.fields.length);
+  }
+  return JSON.stringify({
+    label: original.label, icon: original.icon, description: original.description || '', fields: original.fields || [],
+  }) !== JSON.stringify({
+    label: draft.label, icon: draft.icon, description: draft.description || '', fields: draft.fields || [],
+  });
+}
+
+function fieldSummary(f) {
+  const parts = [];
+  if (f.kind === 'single') parts.push('одно значение');
+  else if (f.kind === 'multi') parts.push('несколько значений');
+  else parts.push('текст');
+  if (f.kind === 'single' || f.kind === 'multi') {
+    const n = (f.options || []).length;
+    parts.push(`${n} ${pluralOptions(n)}`);
+  }
+  if (f.required) parts.push('обязательное');
+  return parts.join(' · ');
+}
+
+function pluralOptions(n) {
+  const m = n % 10, h = n % 100;
+  if (m === 1 && h !== 11) return 'опция';
+  if (m >= 2 && m <= 4 && (h < 10 || h >= 20)) return 'опции';
+  return 'опций';
+}
+
+function pluralRecords(n) {
+  const m = n % 10, h = n % 100;
+  if (m === 1 && h !== 11) return 'запись';
+  if (m >= 2 && m <= 4 && (h < 10 || h >= 20)) return 'записи';
+  return 'записей';
+}
+
+// Bottom-sheet для создания/редактирования поля.
+// existing=null — create; existing=Field — edit.
+// onSave(updatedField, deleted=false) вызывается на «Готово» / «Удалить».
+function openFieldEditor(existing, onSave) {
+  const isNew = !existing;
+  const draft = existing ? JSON.parse(JSON.stringify(existing)) : {
+    key: newFieldKey(),
+    label: '',
+    kind: 'single',
+    required: false,
+    options: [],
+  };
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'v3-sheet-backdrop';
+  const sheet = document.createElement('div');
+  sheet.className = 'v3-sheet v3-sheet-tall fe-sheet';
+  backdrop.appendChild(sheet);
+
+  const close = () => backdrop.remove();
+
+  function readNameInput() {
+    const el = sheet.querySelector('[data-fe-name]');
+    if (el) draft.label = el.value;
+    const ph = sheet.querySelector('[data-fe-ph]');
+    if (ph) draft.placeholder = ph.value;
+  }
+
+  function render() {
+    sheet.innerHTML = `
+      <div class="v3-sheet-handle" aria-hidden="true"></div>
+      <div class="v3-sheet-title-row">
+        <h2>${isNew ? 'Поле · создание' : 'Поле · редактирование'}</h2>
+        <button type="button" class="link" data-cancel>Отмена</button>
+      </div>
+
+      <div class="fe-name-card">
+        <div class="fe-name-lbl">НАЗВАНИЕ ПОЛЯ</div>
+        <input class="fe-name-input" type="text" data-fe-name maxlength="40" value="${escapeHtml(draft.label || '')}" placeholder="например, Творог">
+      </div>
+
+      <div class="v3-sheet-section-lbl">ТИП</div>
+      <div class="fe-kind-seg">
+        <button type="button" class="fe-kind ${draft.kind === 'single' ? 'active' : ''}" data-kind="single">Одно значение</button>
+        <button type="button" class="fe-kind ${draft.kind === 'multi' ? 'active' : ''}" data-kind="multi">Несколько</button>
+        <button type="button" class="fe-kind ${draft.kind === 'text' ? 'active' : ''}" data-kind="text">Текст</button>
+      </div>
+
+      <div class="fe-req-row">
+        <span class="fe-req-lbl">Обязательное поле</span>
+        <button type="button" class="uiswitch ${draft.required ? 'on' : 'off'}" data-fe-req>
+          <span class="uiswitch-knob"></span>
+        </button>
+      </div>
+
+      <div data-fe-kind-body></div>
+
+      <div class="fe-cta-row">
+        ${!isNew ? '<button type="button" class="fe-del-btn" data-fe-del>Удалить</button>' : ''}
+        <button type="button" class="fe-done-btn" data-fe-done>Готово</button>
+      </div>
+    `;
+
+    const body = sheet.querySelector('[data-fe-kind-body]');
+    if (draft.kind === 'single' || draft.kind === 'multi') {
+      body.innerHTML = `
+        <div class="fe-opt-head">
+          <span class="v3-sheet-section-lbl">ЗНАЧЕНИЯ · ${(draft.options || []).length}</span>
+          <button type="button" class="link" data-fe-add-opt>+ Значение</button>
+        </div>
+        <div class="fe-opt-card" data-fe-opts></div>
+      `;
+      const opts = body.querySelector('[data-fe-opts]');
+      (draft.options || []).forEach((o, i) => {
+        const row = document.createElement('div');
+        row.className = 'fe-opt-row';
+        row.innerHTML = `
+          <input type="text" class="fe-opt-input" data-fe-opt-input="${i}" maxlength="40" value="${escapeHtml(o.label || '')}" placeholder="значение">
+          <button type="button" class="tc-field-btn" data-fe-opt-move="${i}:-1" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" class="tc-field-btn" data-fe-opt-move="${i}:1" ${i === draft.options.length - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" class="tc-field-btn" data-fe-opt-del="${i}">✕</button>
+        `;
+        opts.appendChild(row);
+      });
+    } else {
+      // text
+      body.innerHTML = `
+        <div class="fe-name-card">
+          <div class="fe-name-lbl">ПОДСКАЗКА (ОПЦИОНАЛЬНО)</div>
+          <input class="fe-name-input" type="text" data-fe-ph maxlength="60" value="${escapeHtml(draft.placeholder || '')}" placeholder="например, по желанию">
+        </div>
+      `;
+    }
+  }
+
+  sheet.addEventListener('input', (e) => {
+    const idx = e.target.dataset?.feOptInput;
+    if (idx !== undefined) {
+      draft.options[+idx].label = e.target.value;
+      return;
+    }
+    if (e.target.dataset?.feName !== undefined) {
+      draft.label = e.target.value;
+      return;
+    }
+    if (e.target.dataset?.fePh !== undefined) {
+      draft.placeholder = e.target.value;
+    }
+  });
+
+  sheet.addEventListener('click', (e) => {
+    if (e.target.closest('[data-cancel]')) { close(); return; }
+    if (e.target.closest('[data-fe-done]')) {
+      readNameInput();
+      const label = (draft.label || '').trim();
+      if (!label) { alert('Название поля не заполнено'); return; }
+      if (draft.kind === 'single' || draft.kind === 'multi') {
+        const opts = (draft.options || []).filter(o => (o.label || '').trim());
+        if (opts.length < 2) { alert('Нужно минимум 2 значения'); return; }
+        draft.options = opts;
+        delete draft.placeholder;
+      } else {
+        delete draft.options;
+      }
+      onSave(draft, false);
+      close();
+      return;
+    }
+    if (e.target.closest('[data-fe-del]')) {
+      if (!confirm('Удалить поле?')) return;
+      onSave(draft, true);
+      close();
+      return;
+    }
+    const kBtn = e.target.closest('[data-kind]');
+    if (kBtn) {
+      readNameInput();
+      const next = kBtn.dataset.kind;
+      if (next === draft.kind) return;
+      // choice→text с заполненными options — confirm
+      const fromChoice = (draft.kind === 'single' || draft.kind === 'multi');
+      const hasOpts = fromChoice && (draft.options || []).some(o => (o.label || '').trim());
+      if (fromChoice && next === 'text' && hasOpts) {
+        if (!confirm(`Удалить ${draft.options.length} значений?`)) return;
+        draft.options = [];
+      }
+      if (next !== 'text' && !draft.options) draft.options = [];
+      draft.kind = next;
+      render();
+      return;
+    }
+    if (e.target.closest('[data-fe-req]')) {
+      readNameInput();
+      draft.required = !draft.required;
+      render();
+      return;
+    }
+    if (e.target.closest('[data-fe-add-opt]')) {
+      readNameInput();
+      if (!draft.options) draft.options = [];
+      draft.options.push({ key: newOptionKey(), label: '' });
+      render();
+      return;
+    }
+    const moveBtn = e.target.closest('[data-fe-opt-move]');
+    if (moveBtn) {
+      readNameInput();
+      const [iStr, dirStr] = moveBtn.dataset.feOptMove.split(':');
+      const i = +iStr, dir = +dirStr;
+      const j = i + dir;
+      if (j < 0 || j >= draft.options.length) return;
+      const tmp = draft.options[i]; draft.options[i] = draft.options[j]; draft.options[j] = tmp;
+      render();
+      return;
+    }
+    const delOpt = e.target.closest('[data-fe-opt-del]');
+    if (delOpt) {
+      readNameInput();
+      const i = +delOpt.dataset.feOptDel;
+      draft.options.splice(i, 1);
+      render();
+      return;
+    }
+  });
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  render();
+  document.body.appendChild(backdrop);
+}
+
 // ---------- bottom sheet (theme / type) ----------
 
 async function openTypeSheet({ recordId, eventId, typeKey }) {
   const type = window.TYPE_BY_KEY[typeKey];
-  if (!type) return;
+  if (!type) {
+    // Orphan event: тема была удалена (обычно user type), но событие есть в истории.
+    // labelSnapshot в карточке истории всё ещё показывается; редактировать нельзя.
+    // См. custom-types-spec.md §7.2.
+    alert('Эта тема удалена. Запись видна в истории, но редактировать её уже нельзя.');
+    return;
+  }
   let ev;
   if (eventId) {
     ev = await db.events.get(eventId);
