@@ -2760,6 +2760,117 @@ function buildTxt(meta, periodKey, data) {
   return lines.join('\n');
 }
 
+function eventValuesResolved(ev) {
+  const type = window.TYPE_BY_KEY[ev.type];
+  if (!type) return null;
+  const out = {};
+  for (const f of type.fields) {
+    const v = ev.fields?.[f.key];
+    if (v == null || (Array.isArray(v) && v.length === 0) || v === '') continue;
+    if (f.kind === 'single') {
+      const o = (f.options || []).find(o => o.key === v);
+      if (o) out[f.label] = o.label;
+    } else if (f.kind === 'multi') {
+      const labels = v.map(k => (f.options || []).find(o => o.key === k)?.label).filter(Boolean);
+      if (labels.length) out[f.label] = labels;
+    } else if (f.kind === 'text') {
+      const s = String(v).trim();
+      if (s) out[f.label] = s;
+    }
+  }
+  return out;
+}
+
+function buildJsonExport(meta, periodKey, data) {
+  const { profile } = meta;
+  const { records, eventsByRec, fromIso, toIso } = data;
+  const periodLabel = {
+    today: 'Сегодня',
+    '7d': '7 дней',
+    '30d': '30 дней',
+    all: 'всё время',
+  }[periodKey];
+
+  const usedTypeKeys = new Set();
+  for (const evs of eventsByRec.values()) {
+    for (const ev of evs) usedTypeKeys.add(ev.type);
+  }
+  const allTypes = [...(window.TYPES || []), ...(window.USER_TYPES || [])];
+  const themes = allTypes
+    .filter(t => usedTypeKeys.has(t.key))
+    .map(t => ({
+      key: t.key,
+      label: t.label,
+      icon: t.icon || null,
+      description: t.description || null,
+      source: window.USER_TYPES?.some(u => u.key === t.key) ? 'user' : 'builtin',
+      fields: (t.fields || []).map(f => ({
+        key: f.key,
+        label: f.label,
+        kind: f.kind,
+        required: !!f.required,
+        ...(f.kind === 'single' || f.kind === 'multi'
+          ? { options: (f.options || []).map(o => ({ key: o.key, label: o.label })) }
+          : {}),
+        ...(f.placeholder ? { placeholder: f.placeholder } : {}),
+      })),
+    }));
+
+  const totalEvents = Array.from(eventsByRec.values()).reduce((s, a) => s + a.length, 0);
+  const effFromIso = fromIso || (records[0] && records[0].sortMoment) || toIso;
+
+  const recordsOut = records.map(r => {
+    const evs = eventsByRec.get(r.id) || [];
+    return {
+      id: r.id,
+      moment: r.sortMoment,
+      comment: (r.comment || '').trim() || null,
+      events: evs.map(ev => {
+        const resolved = eventValuesResolved(ev);
+        const base = {
+          type: ev.type,
+          typeLabel: ev.labelSnapshot || window.TYPE_BY_KEY[ev.type]?.label || ev.type,
+          moment: ev.moment,
+          note: ev.note || null,
+        };
+        if (resolved === null) {
+          return { ...base, orphan: true, rawValues: ev.fields || {} };
+        }
+        return { ...base, values: resolved };
+      }),
+    };
+  });
+
+  const out = {
+    instructions: 'Структурированный экспорт журнала наблюдений Kid Journal. Каждая запись (records[]) — сессия наблюдений в момент `moment`, содержит одно или несколько событий разных тем. Структура полей каждой темы описана в `themes[]`. Значения в `events[].values` уже расшифрованы как человекочитаемые лейблы (ключ = label поля, значение = label опции; для multi-полей значение — массив; для text-полей — строка).',
+    meta: {
+      app: 'Kid Journal',
+      schemaVersion: 'v5',
+      exportedAt: new Date().toISOString(),
+      profile: {
+        id: profile.id,
+        name: profile.name,
+        description: profile.description || null,
+      },
+      period: {
+        key: periodKey,
+        label: periodLabel,
+        fromIso: effFromIso,
+        toIso,
+      },
+      template: meta.templateKey || 'free',
+      counts: {
+        records: records.length,
+        events: totalEvents,
+      },
+    },
+    themes,
+    records: recordsOut,
+  };
+
+  return JSON.stringify(out, null, 2);
+}
+
 function renderExportDom(meta, periodKey, data) {
   const { profile } = meta;
   const { records, eventsByRec, fromIso, toIso } = data;
@@ -2879,6 +2990,26 @@ async function deliverTxt(filename, text) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+async function deliverJson(filename, jsonString) {
+  const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+  const file = new File([blob], filename, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 function deliverPdfViaPrint(filename, dom) {
   const prevTitle = document.title;
   document.title = filename.replace(/\.pdf$/, '');
@@ -2965,6 +3096,8 @@ function openExport() {
     const filename = exportFilename(profile, periodKey, currentData, formatKey, templateKey);
     if (formatKey === 'txt') {
       await deliverTxt(filename, buildTxt(meta, periodKey, currentData));
+    } else if (formatKey === 'json') {
+      await deliverJson(filename, buildJsonExport(meta, periodKey, currentData));
     } else {
       deliverPdfViaPrint(filename, renderExportDom(meta, periodKey, currentData));
     }
