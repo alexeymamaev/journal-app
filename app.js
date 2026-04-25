@@ -478,7 +478,8 @@ function eventSummary(ev) {
       const o = opts.find(o => o.key === v);
       if (o) parts.push(o.label);
     } else if (f.kind === 'multi') {
-      const labels = v.map(k => opts.find(o => o.key === k)?.label).filter(Boolean);
+      const arr = Array.isArray(v) ? v : [v];
+      const labels = arr.map(k => opts.find(o => o.key === k)?.label).filter(Boolean);
       if (labels.length) parts.push(labels.join(', '));
     }
   }
@@ -2670,7 +2671,8 @@ function eventFieldLines(ev) {
       const o = (f.options || []).find(o => o.key === v);
       if (o) out.push([f.label, o.label]);
     } else if (f.kind === 'multi') {
-      const labels = v.map(k => (f.options || []).find(o => o.key === k)?.label).filter(Boolean);
+      const arr = Array.isArray(v) ? v : [v];
+      const labels = arr.map(k => (f.options || []).find(o => o.key === k)?.label).filter(Boolean);
       if (labels.length) out.push([f.label, labels.join(', ')]);
     } else if (f.kind === 'text') {
       if (String(v).trim()) out.push([f.label, String(v).trim()]);
@@ -2771,7 +2773,8 @@ function eventValuesResolved(ev) {
       const o = (f.options || []).find(o => o.key === v);
       if (o) out[f.label] = o.label;
     } else if (f.kind === 'multi') {
-      const labels = v.map(k => (f.options || []).find(o => o.key === k)?.label).filter(Boolean);
+      const arr = Array.isArray(v) ? v : [v];
+      const labels = arr.map(k => (f.options || []).find(o => o.key === k)?.label).filter(Boolean);
       if (labels.length) out[f.label] = labels;
     } else if (f.kind === 'text') {
       const s = String(v).trim();
