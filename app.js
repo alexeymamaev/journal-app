@@ -1162,6 +1162,12 @@ async function renderSettings() {
       }
     },
   }));
+  aboutGroup.appendChild(sgRow({
+    title: 'Загрузить бэкап',
+    sub: 'JSON из «Сохранить бэкап» · полностью заменит текущие данные',
+    chev: true,
+    onTap: () => triggerBackupImport(),
+  }));
   root.appendChild(aboutGroup);
 
   $('[data-back]', node).addEventListener('click', () => renderMain());
@@ -1231,6 +1237,51 @@ async function clearAllData() {
   await Dexie.delete('kidjournal-v5');
   // hard reload — state reset, Dexie reopen fresh
   location.reload();
+}
+
+function triggerBackupImport() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.style.display = 'none';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    try {
+      const json = await file.text();
+      let preview;
+      try { preview = JSON.parse(json); } catch { throw new Error('Файл не JSON.'); }
+      if (!preview || preview.source !== 'kid-journal-app') {
+        throw new Error('Это не бэкап Kid Journal.');
+      }
+      const expected = window.KJMigrate.CURRENT_SCHEMA_VERSION;
+      if (preview.schemaVersion !== expected) {
+        throw new Error(
+          `Несовместимая версия бэкапа: v${preview.schemaVersion}. ` +
+          `Поддерживается только v${expected} (текущая).`
+        );
+      }
+      const c = preview.counts || {};
+      const when = preview.exportedAt ? new Date(preview.exportedAt).toLocaleString('ru-RU') : '?';
+      const ok = confirm(
+        `Заменить ВСЕ данные на бэкап от ${when}?\n\n` +
+        `Записей: ${c.records ?? 0}\n` +
+        `Событий: ${c.events ?? 0}\n` +
+        `Профилей-конфигов: ${c.config ?? 0}\n` +
+        `Кастом-типов: ${c.userTypes ?? 0}\n\n` +
+        `Текущие данные будут удалены, действие необратимо.`
+      );
+      if (!ok) return;
+      await window.KJMigrate.importBackup(db, json);
+      // hard reload — пересобрать state.config, перерисовать main, заново открыть Dexie
+      location.reload();
+    } catch (e) {
+      showError(e);
+    }
+  });
+  document.body.appendChild(input);
+  input.click();
 }
 
 // --- settings: profile detail (v3) ---

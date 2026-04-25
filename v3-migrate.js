@@ -16,11 +16,15 @@
 // a File works and opens the share sheet.
 
 (function (global) {
+  const CURRENT_SCHEMA_VERSION = 4;
+
   async function exportDbAsJson(db, schemaVersion) {
-    const [config, records, events] = await Promise.all([
+    const hasUserTypes = !!db.userTypes;
+    const [config, records, events, userTypes] = await Promise.all([
       db.config.toArray(),
       db.records.toArray(),
       db.events.toArray(),
+      hasUserTypes ? db.userTypes.toArray() : Promise.resolve([]),
     ]);
 
     const backup = {
@@ -31,8 +35,9 @@
         config: config.length,
         records: records.length,
         events: events.length,
+        userTypes: userTypes.length,
       },
-      data: { config, records, events },
+      data: { config, records, events, userTypes },
     };
 
     const json = JSON.stringify(backup, null, 2);
@@ -65,9 +70,49 @@
   }
 
   async function exportCurrentBackup(db) {
-    // Current schema is v3 (post-migration). If этот код вызвали до миграции,
-    // хелпер на уровне боота runPreMigrationBackupIfNeeded уже дёрнул exportV2Backup.
-    return exportDbAsJson(db, 3);
+    return exportDbAsJson(db, CURRENT_SCHEMA_VERSION);
+  }
+
+  async function importBackup(db, json) {
+    let backup;
+    try {
+      backup = JSON.parse(json);
+    } catch {
+      throw new Error('Файл не JSON.');
+    }
+    if (!backup || backup.source !== 'kid-journal-app') {
+      throw new Error('Это не бэкап Kid Journal.');
+    }
+    if (backup.schemaVersion !== CURRENT_SCHEMA_VERSION) {
+      throw new Error(
+        `Несовместимая версия бэкапа: v${backup.schemaVersion}. ` +
+        `Поддерживается только v${CURRENT_SCHEMA_VERSION} (текущая).`
+      );
+    }
+    const { config = [], records = [], events = [], userTypes = [] } = backup.data || {};
+
+    await db.transaction('rw', db.config, db.records, db.events, db.userTypes, async () => {
+      await Promise.all([
+        db.config.clear(),
+        db.records.clear(),
+        db.events.clear(),
+        db.userTypes.clear(),
+      ]);
+      if (config.length) await db.config.bulkAdd(config);
+      if (records.length) await db.records.bulkAdd(records);
+      if (events.length) await db.events.bulkAdd(events);
+      if (userTypes.length) await db.userTypes.bulkAdd(userTypes);
+    });
+
+    return {
+      counts: {
+        config: config.length,
+        records: records.length,
+        events: events.length,
+        userTypes: userTypes.length,
+      },
+      exportedAt: backup.exportedAt || null,
+    };
   }
 
   function yyyymmdd() {
@@ -76,5 +121,11 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
 
-  global.KJMigrate = { exportV2Backup, exportCurrentBackup, exportDbAsJson };
+  global.KJMigrate = {
+    exportV2Backup,
+    exportCurrentBackup,
+    exportDbAsJson,
+    importBackup,
+    CURRENT_SCHEMA_VERSION,
+  };
 })(window);
